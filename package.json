@@ -5,6 +5,12 @@
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@12.3.4",
+  "files": [
+    "src",
+    "docs/references/diagram-design/skills/diagram-design",
+    "docs/references/diagram-design/LICENSE",
+    "docs/references/diagram-design/THIRD_PARTY_LICENSES.md"
+  ],
   "keywords": ["pi-package", "pi-extension"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -31,7 +37,8 @@
     "vitest": "^3.0.0"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./src/index.ts"],
+    "skills": ["./docs/references/diagram-design/skills/diagram-design"]
   },
   "scripts": {
     "lint": "biome check .",

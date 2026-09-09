@@ -59,6 +59,7 @@
       "**",
       "!**/node_modules",
       "!**/.next",
+      "!docs/references/diagram-design",
       "!**/dist",
       "!**/build",
       "!**/backend",
