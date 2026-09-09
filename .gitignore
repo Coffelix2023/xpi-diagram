@@ -12,6 +12,9 @@ __pycache__/
 .venv/
 coverage/
 
+# xpi-diagram runtime output (versioned diagram artifacts + review state)
+.pi/diagram/
+
 # c6x-config
 **/feedback
 **/fast-fixes
