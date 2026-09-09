@@ -6,6 +6,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Value } from "typebox/value";
 import {
   type DiagramResult,
+  type DiagramReviewResult,
+  type PreviewStatus,
   type ReviewEvent,
   reviewEventSchema,
 } from "./contracts.js";
@@ -40,6 +42,7 @@ interface GlimpseModule {
 export interface GlimpseLoaderOptions {
   loadGlimpse?: () => Promise<GlimpseModule | null>;
   readyTimeoutMs?: number;
+  writeReviewState?: typeof writeDiagramReviewState;
 }
 
 interface ReviewContext {
@@ -61,10 +64,20 @@ type ReviewValidation =
     };
 
 interface ReviewSession extends ReviewContext {
+  abortCleanup?: () => void;
+  completedVersion?: number;
   confirmedVersion: number | null;
+  isIdle: () => boolean;
   key: string;
+  processing: boolean;
   projectRoot: string;
+  resolveReview?: (result: DiagramReviewResult) => void;
   window: GlimpseWindow;
+}
+
+export interface DiagramPreviewResult {
+  previewStatus: PreviewStatus;
+  review?: DiagramReviewResult;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 3_000;
@@ -166,8 +179,8 @@ select, .tool { min-height: 30px; padding: 5px 9px; }
 .tool { min-width: 32px; }
 .content { flex: 1 1 auto; min-height: 0; padding: var(--space-2); overflow: auto; }
 #diagram-frame { display: block; width: 100%; min-height: 420px; height: 100%; border: 1px solid var(--rule); border-radius: var(--rounded-md); background: #fff; }
-.feedback { display: none; flex: none; padding: 0 14px 10px; }
-.feedback.open { display: block; }
+#diagram-frame { display: block; width: 100%; min-height: 420px; height: 100%; border: 1px solid var(--rule); border-radius: var(--rounded-md); background: #fff; transform-origin: top left; }
+.feedback { display: none; flex: none; min-height: 0; max-height: 40%; overflow: auto; padding: 0 14px 10px; }
 textarea { display: block; width: 100%; min-height: 74px; padding: 8px 10px; resize: vertical; background: var(--surface-2); }
 .footer { justify-content: flex-end; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--rule); border-bottom: 0; background: var(--surface-2); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
 .btn { min-height: 32px; padding: 7px 14px; }
@@ -246,7 +259,7 @@ button:disabled { opacity: .45; cursor: default; }
     if (extra) Object.keys(extra).forEach(function (key) { event[key] = extra[key]; });
     window.glimpse.send(event);
   }
-  function setZoom(value) { zoom = Math.min(1.5, Math.max(.8, Math.round(value * 10) / 10)); document.body.style.zoom = String(zoom); }
+  function setZoom(value) { zoom = Math.min(1.5, Math.max(.8, Math.round(value * 10) / 10)); frame.style.zoom = String(zoom); }
   function toggleFeedback() { feedbackPanel.classList.add("open"); feedback.focus(); }
   document.getElementById("version").value = String(selectedVersion);
   document.getElementById("version").addEventListener("change", function (event) { selectedVersion = Number(event.target.value); sendAction("select_version"); });
@@ -302,7 +315,11 @@ export function validateReviewEvent(
       ok: false,
     };
   }
-  if (event.action !== "select_version" && event.version !== context.currentVersion) {
+  if (
+    event.action !== "close" &&
+    event.action !== "select_version" &&
+    event.version !== context.currentVersion
+  ) {
     return {
       code: "stale-version",
       message: "Review version is no longer current",
@@ -396,10 +413,47 @@ function emptyState(version: number): DiagramReviewState {
   };
 }
 
+function waitForReviewDecision(
+  session: ReviewSession,
+  signal?: AbortSignal,
+): Promise<DiagramReviewResult> {
+  if (signal?.aborted) {
+    return Promise.resolve({
+      status: "cancelled",
+      version: session.currentVersion,
+    });
+  }
+  return new Promise((resolveReview) => {
+    session.completedVersion = undefined;
+    session.resolveReview = resolveReview;
+    const abort = () =>
+      settleReview(session, {
+        status: "cancelled",
+        version: session.currentVersion,
+      });
+    signal?.addEventListener("abort", abort, {
+      once: true,
+    });
+    session.abortCleanup = () => signal?.removeEventListener("abort", abort);
+  });
+}
+
+function settleReview(session: ReviewSession, result: DiagramReviewResult): boolean {
+  const resolveReview = session.resolveReview;
+  if (!resolveReview) return false;
+  session.abortCleanup?.();
+  session.abortCleanup = undefined;
+  session.resolveReview = undefined;
+  session.completedVersion = result.version;
+  resolveReview(result);
+  return true;
+}
+
 export class DiagramReviewManager {
   private readonly loadGlimpse: () => Promise<GlimpseModule | null>;
   private readonly readyTimeoutMs: number;
   private readonly sessions = new Map<string, ReviewSession>();
+  private readonly writeReviewState: typeof writeDiagramReviewState;
 
   constructor(
     private readonly pi: Pick<ExtensionAPI, "sendUserMessage">,
@@ -407,12 +461,25 @@ export class DiagramReviewManager {
   ) {
     this.loadGlimpse = options.loadGlimpse ?? defaultLoadGlimpse;
     this.readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    this.writeReviewState = options.writeReviewState ?? writeDiagramReviewState;
   }
 
   async preview(
-    context: Pick<ExtensionContext, "cwd" | "hasUI" | "mode">,
+    context: Pick<ExtensionContext, "cwd" | "hasUI" | "mode" | "isIdle">,
     diagram: DiagramResult,
-  ): Promise<DiagramResult["previewStatus"]> {
+  ): Promise<PreviewStatus>;
+  async preview(
+    context: Pick<ExtensionContext, "cwd" | "hasUI" | "mode" | "isIdle">,
+    diagram: DiagramResult,
+    waitForReview: true,
+    signal?: AbortSignal,
+  ): Promise<DiagramReviewResult | PreviewStatus>;
+  async preview(
+    context: Pick<ExtensionContext, "cwd" | "hasUI" | "mode" | "isIdle">,
+    diagram: DiagramResult,
+    waitForReview = false,
+    signal?: AbortSignal,
+  ): Promise<DiagramReviewResult | PreviewStatus> {
     if (
       !context.hasUI ||
       !SUPPORTED_PREVIEW_MODES.has(context.mode) ||
@@ -432,13 +499,18 @@ export class DiagramReviewManager {
       emptyState(currentVersion);
     state.currentVersion = currentVersion;
     state.updatedAt = new Date().toISOString();
-    await writeDiagramReviewState(projectRoot, diagram.diagramId, state);
+    await this.writeReviewState(projectRoot, diagram.diagramId, state);
     const existing = this.sessions.get(key);
     if (existing) {
+      settleReview(existing, {
+        status: "superseded",
+        version: existing.currentVersion,
+      });
       existing.availableVersions = new Set(versions);
       existing.currentVersion = currentVersion;
       existing.selectedVersion = currentVersion;
       existing.confirmedVersion = state.confirmedVersion;
+      existing.isIdle = context.isIdle;
       existing.window.setHTML(
         buildReviewPanelHtml({
           artifactHtml: await readVersion(
@@ -454,6 +526,7 @@ export class DiagramReviewManager {
         }),
       );
       diagram.previewStatus = "opened";
+      if (waitForReview) return await waitForReviewDecision(existing, signal);
       return diagram.previewStatus;
     }
 
@@ -478,10 +551,8 @@ export class DiagramReviewManager {
           selectedVersion: currentVersion,
         }),
         {
-          frameless: true,
           height: 600,
           title: `Diagram ${diagram.diagramId}`,
-          transparent: true,
           width: 800,
         },
       );
@@ -495,22 +566,41 @@ export class DiagramReviewManager {
       currentVersion,
       diagramId: diagram.diagramId,
       key,
+      isIdle: context.isIdle,
+      processing: false,
       projectRoot,
       selectedVersion: currentVersion,
       window,
     };
     this.sessions.set(key, session);
-    window.on(
-      "message",
-      (message: unknown) => void this.handleMessage(session, message),
-    );
+    window.on("message", (message: unknown) => {
+      if (session.processing) return;
+      session.processing = true;
+      void this.handleMessage(session, message)
+        .catch(() => postStatus(session.window, "Review could not be saved"))
+        .finally(() => {
+          session.processing = false;
+        });
+    });
     window.on("closed", () => {
+      settleReview(session, {
+        status: "closed",
+        version: session.currentVersion,
+      });
+      if (this.sessions.get(key) === session) this.sessions.delete(key);
+    });
+    window.on("error", () => {
+      settleReview(session, {
+        status: "failed",
+        version: session.currentVersion,
+      });
       if (this.sessions.get(key) === session) this.sessions.delete(key);
     });
     try {
       const info = await waitForReady(window, this.readyTimeoutMs);
       window.send(themeScript(info));
       diagram.previewStatus = "opened";
+      if (waitForReview) return await waitForReviewDecision(session, signal);
       return diagram.previewStatus;
     } catch {
       this.sessions.delete(key);
@@ -521,7 +611,13 @@ export class DiagramReviewManager {
   }
 
   closeAll(): void {
-    for (const session of this.sessions.values()) session.window.close();
+    for (const session of this.sessions.values()) {
+      settleReview(session, {
+        status: "cancelled",
+        version: session.currentVersion,
+      });
+      session.window.close();
+    }
     this.sessions.clear();
   }
 
@@ -553,8 +649,16 @@ export class DiagramReviewManager {
       return;
     }
     if (event.action === "close") {
+      settleReview(session, {
+        status: "closed",
+        version: session.currentVersion,
+      });
       session.window.close();
       this.sessions.delete(session.key);
+      return;
+    }
+    if (session.completedVersion === event.version) {
+      postStatus(session.window, "Review already completed");
       return;
     }
     if (event.action === "request_changes") {
@@ -562,15 +666,24 @@ export class DiagramReviewManager {
       return;
     }
     if (event.action === "confirm") {
-      session.confirmedVersion = event.version;
       const state =
         (await readDiagramReviewState(session.projectRoot, session.diagramId)) ??
         emptyState(session.currentVersion);
       state.confirmedVersion = event.version;
       state.currentVersion = session.currentVersion;
       state.updatedAt = new Date().toISOString();
-      await writeDiagramReviewState(session.projectRoot, session.diagramId, state);
+      try {
+        await this.writeReviewState(session.projectRoot, session.diagramId, state);
+      } catch {
+        postStatus(session.window, "Review could not be saved");
+        return;
+      }
+      session.confirmedVersion = event.version;
       postStatus(session.window, "Confirmed");
+      settleReview(session, {
+        status: "confirmed",
+        version: event.version,
+      });
       return;
     }
 
@@ -579,26 +692,33 @@ export class DiagramReviewManager {
       emptyState(session.currentVersion);
     state.latestFeedback = {
       feedback: event.feedback,
-      status: "pending",
+      status: "sent",
       submittedAt: new Date().toISOString(),
       version: event.version,
     };
     state.currentVersion = session.currentVersion;
     state.updatedAt = new Date().toISOString();
-    await writeDiagramReviewState(session.projectRoot, session.diagramId, state);
     try {
-      this.pi.sendUserMessage(
-        `Diagram ${event.diagramId} v${event.version} review feedback:\n${event.feedback}`,
-        {
-          deliverAs: "followUp",
-        },
-      );
-      state.latestFeedback.status = "sent";
-      state.updatedAt = new Date().toISOString();
-      await writeDiagramReviewState(session.projectRoot, session.diagramId, state);
-      postStatus(session.window, "Feedback sent");
+      await this.writeReviewState(session.projectRoot, session.diagramId, state);
     } catch {
-      postStatus(session.window, "Feedback pending");
+      postStatus(session.window, "Review could not be saved");
+      return;
+    }
+    postStatus(session.window, "Feedback sent");
+    const result: DiagramReviewResult = {
+      feedback: event.feedback,
+      status: "changes_requested",
+      version: event.version,
+    };
+    if (!settleReview(session, result)) {
+      const message = `Diagram ${event.diagramId} v${event.version} review feedback:\n${event.feedback}`;
+      if (session.isIdle()) {
+        this.pi.sendUserMessage(message);
+      } else {
+        this.pi.sendUserMessage(message, {
+          deliverAs: "steer",
+        });
+      }
     }
   }
 }

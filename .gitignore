@@ -11,3 +11,6 @@ dist/
 __pycache__/
 .venv/
 coverage/
+
+# c6x-config
+**/feedback

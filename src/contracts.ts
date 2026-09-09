@@ -37,6 +37,38 @@ export const diagramVersionSchema = Type.Integer({
 });
 export const validationStatusSchema = Type.Enum(VALIDATION_STATUSES);
 export const previewStatusSchema = Type.Enum(PREVIEW_STATUSES);
+export const diagramReviewResultSchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Enum([
+        "cancelled",
+        "closed",
+        "failed",
+        "superseded",
+      ]),
+      version: diagramVersionSchema,
+    },
+    strictObject,
+  ),
+  Type.Object(
+    {
+      status: Type.Literal("confirmed"),
+      version: diagramVersionSchema,
+    },
+    strictObject,
+  ),
+  Type.Object(
+    {
+      feedback: Type.String({
+        maxLength: 4_000,
+        minLength: 1,
+      }),
+      status: Type.Literal("changes_requested"),
+      version: diagramVersionSchema,
+    },
+    strictObject,
+  ),
+]);
 export const simplificationNotesSchema = Type.Array(
   Type.String({
     maxLength: 500,
@@ -85,6 +117,7 @@ export const diagramResultSchema = Type.Object(
       minLength: 1,
     }),
     previewStatus: previewStatusSchema,
+    review: Type.Optional(diagramReviewResultSchema),
     simplificationNotes: simplificationNotesSchema,
     type: diagramTypeSchema,
     validationStatus: validationStatusSchema,
@@ -144,6 +177,7 @@ export const reviewEventSchema = Type.Union([
 ]);
 
 export type DiagramArtifact = Static<typeof diagramArtifactSchema>;
+export type DiagramReviewResult = Static<typeof diagramReviewResultSchema>;
 export type DiagramId = Static<typeof diagramIdSchema>;
 export type DiagramResult = Static<typeof diagramResultSchema>;
 export type DiagramType = Static<typeof diagramTypeSchema>;
