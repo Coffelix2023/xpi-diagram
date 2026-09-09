@@ -8,6 +8,9 @@ const SUPPORTED_TYPES_PATTERN =
   /architecture.*process.*sequence.*state-machine.*entity-relationship/i;
 const COMMAND_DESCRIPTION_PATTERN = /configure.*latest/i;
 
+const STYLE_PATTERN = /style|profile/i;
+const REVIEW_PATTERN = /waits for review|review result/i;
+const REOPEN_PATTERN = /reopen|pending tool|busy/i;
 describe("xpi-diagram registration", () => {
   it("exposes create_diagram and the native configuration command", () => {
     const tools: Array<Record<string, unknown>> = [];
@@ -38,5 +41,8 @@ describe("xpi-diagram registration", () => {
     expect(guidance).toContain("diagram-design");
     expect(guidance).toMatch(PROSE_OR_TABLE_PATTERN);
     expect(guidance).toMatch(SUPPORTED_TYPES_PATTERN);
+    expect(guidance).toMatch(STYLE_PATTERN);
+    expect(guidance).toMatch(REVIEW_PATTERN);
+    expect(guidance).toMatch(REOPEN_PATTERN);
   });
 });

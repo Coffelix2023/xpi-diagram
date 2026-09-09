@@ -63,6 +63,50 @@ describe("diagram contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts bounded terminal review results", () => {
+    expect(
+      Value.Check(diagramResultSchema, {
+        diagnostics: [],
+        diagramId: artifact.diagramId,
+        path: ".pi/diagram/checkout-flow/v1.html",
+        previewStatus: "opened",
+        simplificationNotes: [],
+        type: artifact.type,
+        validationStatus: "passed",
+        version: 1,
+        review: {
+          feedback: "Increase contrast.",
+          status: "changes_requested",
+          version: 1,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    "closed",
+    "cancelled",
+    "superseded",
+    "failed",
+  ] as const)("accepts %s terminal review results", (status) => {
+    expect(
+      Value.Check(diagramResultSchema, {
+        diagnostics: [],
+        diagramId: artifact.diagramId,
+        path: ".pi/diagram/checkout-flow/v1.html",
+        previewStatus: "opened",
+        simplificationNotes: [],
+        type: artifact.type,
+        validationStatus: "passed",
+        version: 1,
+        review: {
+          status,
+          version: 1,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects invalid versions and statuses", () => {
     const result = {
       diagnostics: [],

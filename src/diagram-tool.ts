@@ -22,10 +22,16 @@ function summary(result: DiagramResult): string {
     .map(({ code, message }) => `${code}: ${message}`)
     .join(" | ");
   const suffix = diagnostics ? ` Diagnostics: ${diagnostics}` : "";
-  return `Diagram ${result.diagramId} (${result.type}) ${version}; ${result.validationStatus}; ${result.path}.${suffix}`.slice(
+  let review = "";
+  if (result.review?.status === "changes_requested") {
+    review = ` Review: changes requested for v${result.review.version}.\n${result.review.feedback}`;
+  } else if (result.review) {
+    review = ` Review: ${result.review.status} v${result.review.version}.`;
+  }
+  return `${`Diagram ${result.diagramId} (${result.type}) ${version}; ${result.validationStatus}; ${result.path}.${suffix}`.slice(
     0,
     2_000,
-  );
+  )}${review}`;
 }
 
 export async function createDiagramResult(
@@ -63,12 +69,13 @@ export function registerDiagramTool(
   pi.registerTool({
     description:
       "Validate and save a self-contained HTML diagram with inline SVG. Returns bounded metadata, never the HTML body.",
+    executionMode: "sequential",
     label: "Create Diagram",
     name: "create_diagram",
     parameters: diagramArtifactSchema,
     promptSnippet:
       "Create a governed visual explanation as a versioned HTML/SVG diagram",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const details = await createDiagramResult(ctx.cwd, params);
       if (details.validationStatus === "passed") {
         const configuration = await readDiagramConfig(
@@ -81,7 +88,17 @@ export function registerDiagramTool(
         if (!configuration.config.preview) {
           details.previewStatus = "disabled";
         } else {
-          await reviewManager.preview(ctx, details);
+          onUpdate?.({
+            content: [
+              {
+                text: "Waiting for diagram review",
+                type: "text",
+              },
+            ],
+            details,
+          });
+          const review = await reviewManager.preview(ctx, details, true, signal);
+          if (typeof review !== "string") details.review = review;
         }
       }
       return {
@@ -97,8 +114,13 @@ export function registerDiagramTool(
     promptGuidelines: [
       "Use create_diagram only when a visual explanation communicates relationships better than concise prose or a table.",
       "Before create_diagram, apply the diagram-design skill and its selected type reference, then follow its accessibility, connector, and complexity rules.",
+      "Choose the supported diagram type and layout that best express the purpose; keep colors, typography, density, and motion within diagram-design or an explicitly selected user profile.",
+      "The Glimpse preview theme is separate from diagram styling; do not add a style selector or invent a brand profile. Explain the style choice when it matters.",
       "create_diagram supports architecture, process, sequence, state-machine, and entity-relationship; use prose or a table when none fits.",
       "Include data-diagram-type on the accessible SVG and data-diagram-node/data-diagram-edge markers so create_diagram can enforce the selected type budget.",
+      "A successful interactive preview waits for review: confirm accepts the current version, request changes only opens feedback, and close or cancel does not confirm.",
+      "Return the review result to the Agent; preserve feedback text and version. Do not send a second user message for a tool review.",
+      "The /xpi-diagram reopen command does not wait for review. Without a pending tool, feedback is delivered through the host when idle or steered when busy; disabled preview, headless mode, and unavailable Glimpse return directly.",
       "Report every merge, omission, or simplification in simplificationNotes; never invent facts to fill a layout.",
     ],
   });

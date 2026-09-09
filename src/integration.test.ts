@@ -10,13 +10,16 @@ import { readDiagramReviewState } from "./review-state.js";
 
 class FakeWindow extends EventEmitter {
   readonly htmlUpdates: string[] = [];
+  readonly scripts: string[] = [];
   closeCount = 0;
 
   close(): void {
     this.closeCount += 1;
   }
 
-  send(_script: string): void {}
+  send(script: string): void {
+    this.scripts.push(script);
+  }
 
   setHTML(html: string): void {
     this.htmlUpdates.push(html);
@@ -49,6 +52,7 @@ function diagramHtml(marker: string): string {
 interface TuiToolContext {
   cwd: string;
   hasUI: true;
+  isIdle: () => boolean;
   isProjectTrusted: () => boolean;
   mode: "tui";
   ui: {
@@ -56,16 +60,23 @@ interface TuiToolContext {
   };
 }
 
-function tuiContext(cwd: string): TuiToolContext {
+function tuiContext(cwd: string, isIdle = true): TuiToolContext {
   return {
     cwd,
     hasUI: true,
     mode: "tui",
+    isIdle: () => isIdle,
     isProjectTrusted: () => true,
     ui: {
       notify: vi.fn(),
     },
   };
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  await vi.waitFor(() => {
+    expect(predicate()).toBe(true);
+  });
 }
 
 describe("TUI diagram generation smoke test", () => {
@@ -112,11 +123,14 @@ describe("TUI diagram generation smoke test", () => {
       onUpdate: undefined,
       context: ReturnType<typeof tuiContext>,
     ) => Promise<{
+      content: Array<{
+        text: string;
+      }>;
       details: Record<string, unknown>;
     }>;
     const context = tuiContext(project);
 
-    const first = await execute(
+    const firstPromise = execute(
       "smoke-v1",
       {
         diagramId: "smoke",
@@ -127,7 +141,16 @@ describe("TUI diagram generation smoke test", () => {
       undefined,
       context,
     );
-    const second = await execute(
+    await waitUntil(() => window.scripts.length > 0);
+    window.emit("message", {
+      action: "confirm",
+      diagramId: "smoke",
+      version: 1,
+    });
+    const first = await firstPromise;
+
+    const feedback = `Show the cache boundary. ${"x".repeat(2_500)}`;
+    const secondPromise = execute(
       "smoke-v2",
       {
         diagramId: "smoke",
@@ -138,19 +161,47 @@ describe("TUI diagram generation smoke test", () => {
       undefined,
       context,
     );
+    await waitUntil(() => window.htmlUpdates.length > 0);
+    window.emit("message", {
+      action: "submit_feedback",
+      diagramId: "smoke",
+      feedback,
+      version: 2,
+    });
+    const second = await secondPromise;
+    window.emit("message", {
+      action: "submit_feedback",
+      diagramId: "smoke",
+      feedback: "duplicate feedback",
+      version: 2,
+    });
+    await waitUntil(() =>
+      window.scripts.some((script) => script.includes("Review already completed")),
+    );
 
     expect(first.details).toMatchObject({
       path: ".pi/diagram/smoke/v1.html",
       previewStatus: "opened",
       validationStatus: "passed",
       version: 1,
+      review: {
+        status: "confirmed",
+        version: 1,
+      },
     });
     expect(second.details).toMatchObject({
       path: ".pi/diagram/smoke/v2.html",
       previewStatus: "opened",
       validationStatus: "passed",
       version: 2,
+      review: {
+        feedback,
+        status: "changes_requested",
+        version: 2,
+      },
     });
+    expect(second.content[0]?.text).toContain(feedback);
+    expect(second.content[0]?.text).not.toContain("<svg");
     expect(open).toHaveBeenCalledTimes(1);
     expect(
       await readFile(join(project, ".pi/diagram/smoke/v1.html"), "utf8"),
@@ -160,36 +211,8 @@ describe("TUI diagram generation smoke test", () => {
     ).toContain("v2");
     expect(window.htmlUpdates).toHaveLength(1);
     expect(window.htmlUpdates.at(-1)).toContain("v2");
-
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "smoke",
-      version: 2,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect((await readDiagramReviewState(project, "smoke"))?.confirmedVersion).toBe(2);
+    expect((await readDiagramReviewState(project, "smoke"))?.confirmedVersion).toBe(1);
     expect(sendUserMessage).not.toHaveBeenCalled();
-
-    window.emit("message", {
-      action: "submit_feedback",
-      diagramId: "smoke",
-      feedback: "Show the cache boundary.",
-      version: 2,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Diagram smoke v2 review feedback:"),
-      {
-        deliverAs: "followUp",
-      },
-    );
-
-    window.emit("message", {
-      action: "select_version",
-      diagramId: "smoke",
-      version: 1,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(window.htmlUpdates.at(-1)).toContain("v1");
+    expect(tool.executionMode).toBe("sequential");
   });
 });
