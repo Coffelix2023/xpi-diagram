@@ -197,6 +197,7 @@ describe("review panel document", () => {
     expect(html).not.toContain(payload);
     expect(html).toContain("window.glimpse.send");
     expect(html).toContain('sendAction("confirm")');
+    expect(html).toContain('data-i18n="confirmAndClose"');
     expect(html).toContain('sendAction("request_changes")');
     expect(html).toContain('sendAction("submit_feedback"');
     expect(html).toContain('sendAction("select_version")');
@@ -221,7 +222,9 @@ describe("review panel document", () => {
       ".feedback { display: none; flex: none; min-height: 0; max-height: 40%; overflow: auto;",
     );
     expect(html).toContain(".footer { justify-content: flex-end;");
-    expect(html).toContain("frame.style.zoom = String(zoom)");
+    expect(html).toContain('frame.style.transform = "scale(" + zoom + ")"');
+    expect(html).toContain('frame.style.width = (100 / zoom) + "%"');
+    expect(html).toContain('frame.style.height = (100 / zoom) + "%"');
     expect(html).not.toContain("document.body.style.zoom");
     expect(html).toContain("Math.min(1.5, Math.max(.8");
     expect(html).toContain("setZoom(1); });");
@@ -263,6 +266,7 @@ describe("review panel document", () => {
       status: "confirmed",
       version: 1,
     });
+    expect(window.closeCount).toBe(1);
   });
 
   it("releases waiting reviews on close, cancellation, and replacement", async () => {
@@ -627,12 +631,6 @@ describe("review panel session", () => {
       version: 2,
     });
 
-    window.emit("message", {
-      action: "close",
-      diagramId: "live-review",
-      version: 2,
-    });
-    await flushMessages();
     expect(window.closeCount).toBe(1);
     expect(
       (await readDiagramReviewState(project, "live-review"))?.confirmedVersion,

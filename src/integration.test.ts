@@ -161,7 +161,7 @@ describe("TUI diagram generation smoke test", () => {
       undefined,
       context,
     );
-    await waitUntil(() => window.htmlUpdates.length > 0);
+    await waitUntil(() => open.mock.calls.length > 1);
     window.emit("message", {
       action: "submit_feedback",
       diagramId: "smoke",
@@ -202,15 +202,13 @@ describe("TUI diagram generation smoke test", () => {
     });
     expect(second.content[0]?.text).toContain(feedback);
     expect(second.content[0]?.text).not.toContain("<svg");
-    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(2);
     expect(
       await readFile(join(project, ".pi/diagram/smoke/v1.html"), "utf8"),
     ).toContain("v1");
     expect(
       await readFile(join(project, ".pi/diagram/smoke/v2.html"), "utf8"),
     ).toContain("v2");
-    expect(window.htmlUpdates).toHaveLength(1);
-    expect(window.htmlUpdates.at(-1)).toContain("v2");
     expect((await readDiagramReviewState(project, "smoke"))?.confirmedVersion).toBe(1);
     expect(sendUserMessage).not.toHaveBeenCalled();
     expect(tool.executionMode).toBe("sequential");

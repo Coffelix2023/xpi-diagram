@@ -24,7 +24,7 @@ Design principles:
 
 ## Diagram workflow
 
-- `create_diagram` validates and saves a version before opening the Glimpse preview. With interactive preview enabled, the tool remains pending until a review ends: `Confirm` accepts the current version, `Request changes` only opens feedback, and `Close` or cancel does not confirm. The tool result includes the review status, version, and complete feedback text.
+- `create_diagram` validates and saves a version before opening the Glimpse preview. With interactive preview enabled, the tool remains pending until a review ends: `Confirm & close` accepts the current version and closes the panel, `Request changes` only opens feedback, and `Close` or cancel does not confirm. The tool result includes the review status, version, and complete feedback text.
 - Choose the diagram type and layout that best communicate the purpose. Apply the selected `diagram-design` type reference and its accessibility, connector, complexity, color, typography, density, and motion rules. The Glimpse window theme is separate from the diagram style; do not add a style selector or invent a brand profile.
 - `/xpi-diagram` manages preview configuration and reopens the latest saved diagram without waiting for review. When no tool is waiting, feedback is delivered through the host when it is idle or steered when it is busy. Disabled preview, headless mode, and unavailable Glimpse return the saved result directly.
 ## Tech stack

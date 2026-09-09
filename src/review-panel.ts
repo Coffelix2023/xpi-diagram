@@ -214,7 +214,7 @@ button:disabled { opacity: .45; cursor: default; }
     <div class="status" id="status" role="status" aria-live="polite"></div>
     <button class="btn" id="request" type="button" data-i18n="requestChanges">Request changes</button>
     <button class="btn" id="submit" type="button" data-i18n="submitFeedback">Submit feedback</button>
-    <button class="btn btn-primary" id="confirm" type="button" data-i18n="confirm">Confirm</button>
+    <button class="btn btn-primary" id="confirm" type="button" data-i18n="confirmAndClose">Confirm &amp; close</button>
     <button class="btn" id="close" type="button" data-i18n="close">Close</button>
   </footer>
 </div>
@@ -223,8 +223,8 @@ button:disabled { opacity: .45; cursor: default; }
   "use strict";
   var DATA = ${data};
   var TEXT = {
-    zh: { title: "图表审阅", versionLabel: "版本", zoomOut: "A-", zoomIn: "A+", zoomReset: "重置", zoomOutTitle: "缩小 (⌘-)", zoomInTitle: "放大 (⌘+)", zoomResetTitle: "重置 (⌘0)", feedbackLabel: "修改意见", feedbackPlaceholder: "描述需要调整的内容", requestChanges: "请求修改", submitFeedback: "提交反馈", confirm: "确认", close: "关闭", current: "当前版本", confirmed: "已确认", feedbackRequired: "请先输入修改意见", sent: "反馈已发送", pending: "反馈待发送", invalid: "操作未接受" },
-    en: { title: "Diagram review", versionLabel: "Version", zoomOut: "A-", zoomIn: "A+", zoomReset: "Reset", zoomOutTitle: "Zoom out (⌘-)", zoomInTitle: "Zoom in (⌘+)", zoomResetTitle: "Reset (⌘0)", feedbackLabel: "Requested changes", feedbackPlaceholder: "Describe what should change", requestChanges: "Request changes", submitFeedback: "Submit feedback", confirm: "Confirm", close: "Close", current: "Current version", confirmed: "Confirmed", feedbackRequired: "Enter feedback first", sent: "Feedback sent", pending: "Feedback pending", invalid: "Action rejected" }
+    zh: { title: "图表审阅", versionLabel: "版本", zoomOut: "A-", zoomIn: "A+", zoomReset: "重置", zoomOutTitle: "缩小 (⌘-)", zoomInTitle: "放大 (⌘+)", zoomResetTitle: "重置 (⌘0)", feedbackLabel: "修改意见", feedbackPlaceholder: "描述需要调整的内容", requestChanges: "请求修改", submitFeedback: "提交反馈", confirmAndClose: "确认并关闭", close: "关闭", current: "当前版本", confirmed: "已确认", feedbackRequired: "请先输入修改意见", sent: "反馈已发送", pending: "反馈待发送", invalid: "操作未接受" },
+    en: { title: "Diagram review", versionLabel: "Version", zoomOut: "A-", zoomIn: "A+", zoomReset: "Reset", zoomOutTitle: "Zoom out (⌘-)", zoomInTitle: "Zoom in (⌘+)", zoomResetTitle: "Reset (⌘0)", feedbackLabel: "Requested changes", feedbackPlaceholder: "Describe what should change", requestChanges: "Request changes", submitFeedback: "Submit feedback", confirmAndClose: "Confirm & close", close: "Close", current: "Current version", confirmed: "Confirmed", feedbackRequired: "Enter feedback first", sent: "Feedback sent", pending: "Feedback pending", invalid: "Action rejected" }
   };
   var lang = "en";
   var zoom = 1;
@@ -259,7 +259,7 @@ button:disabled { opacity: .45; cursor: default; }
     if (extra) Object.keys(extra).forEach(function (key) { event[key] = extra[key]; });
     window.glimpse.send(event);
   }
-  function setZoom(value) { zoom = Math.min(1.5, Math.max(.8, Math.round(value * 10) / 10)); frame.style.zoom = String(zoom); }
+  function setZoom(value) { zoom = Math.min(1.5, Math.max(.8, Math.round(value * 10) / 10)); frame.style.transform = "scale(" + zoom + ")"; frame.style.width = (100 / zoom) + "%"; frame.style.height = (100 / zoom) + "%"; }
   function toggleFeedback() { feedbackPanel.classList.add("open"); feedback.focus(); }
   document.getElementById("version").value = String(selectedVersion);
   document.getElementById("version").addEventListener("change", function (event) { selectedVersion = Number(event.target.value); sendAction("select_version"); });
@@ -684,6 +684,8 @@ export class DiagramReviewManager {
         status: "confirmed",
         version: event.version,
       });
+      session.window.close();
+      this.sessions.delete(session.key);
       return;
     }
 
