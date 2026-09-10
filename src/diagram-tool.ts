@@ -1,7 +1,8 @@
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { readDiagramConfig } from "./config.js";
+import { type BrowserPreviewResult, openBrowserPreview } from "./browser-preview.js";
+import { type PreviewMode, readDiagramConfig } from "./config.js";
 import {
   type DiagramArtifact,
   type DiagramResult,
@@ -59,6 +60,41 @@ export async function createDiagramResult(
   };
 }
 
+export async function previewDiagram(
+  context: Pick<ExtensionContext, "cwd" | "hasUI" | "mode" | "isIdle" | "ui">,
+  diagram: DiagramResult,
+  mode: PreviewMode,
+  reviewManager: DiagramReviewManager,
+  openBrowser: typeof openBrowserPreview = openBrowserPreview,
+): Promise<void> {
+  if (mode === "browser") {
+    let result: BrowserPreviewResult;
+    try {
+      result = await openBrowser(join(context.cwd, diagram.path));
+    } catch (error) {
+      result = {
+        diagnostic: `Could not open browser preview: ${(error as Error).message}`,
+        path: join(context.cwd, diagram.path),
+        status: "failed",
+      };
+    }
+    diagram.previewStatus = result.status;
+    if (result.diagnostic) {
+      diagram.diagnostics.push({
+        code: "browser-preview",
+        message: result.diagnostic,
+      });
+    }
+    if (result.status === "opened") {
+      diagram.review = await reviewManager.review(context, diagram);
+    }
+    return;
+  }
+  const status = await reviewManager.preview(context, diagram);
+  if (status === "opened")
+    diagram.review = await reviewManager.review(context, diagram);
+}
+
 export function registerDiagramTool(
   pi: ExtensionAPI,
   reviewManager = new DiagramReviewManager(pi),
@@ -75,7 +111,7 @@ export function registerDiagramTool(
     parameters: diagramArtifactSchema,
     promptSnippet:
       "Create a governed visual explanation as a versioned HTML/SVG diagram",
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       const details = await createDiagramResult(ctx.cwd, params);
       if (details.validationStatus === "passed") {
         const configuration = await readDiagramConfig(
@@ -91,14 +127,18 @@ export function registerDiagramTool(
           onUpdate?.({
             content: [
               {
-                text: "Waiting for diagram review",
+                text: "Waiting for diagram review in Pi",
                 type: "text",
               },
             ],
             details,
           });
-          const review = await reviewManager.preview(ctx, details, true, signal);
-          if (typeof review !== "string") details.review = review;
+          await previewDiagram(
+            ctx,
+            details,
+            configuration.config.previewMode,
+            reviewManager,
+          );
         }
       }
       return {

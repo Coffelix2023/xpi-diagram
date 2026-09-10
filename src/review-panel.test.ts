@@ -90,10 +90,6 @@ async function storeVersion(
   return stored.version;
 }
 
-async function flushMessages(): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, 20));
-}
-
 describe("DiagramReviewManager capability fallback", () => {
   it.each([
     [
@@ -195,18 +191,19 @@ describe("review panel document", () => {
 
     expect(html).toContain('<iframe id="diagram-frame" sandbox=""');
     expect(html).not.toContain(payload);
-    expect(html).toContain("window.glimpse.send");
-    expect(html).toContain('sendAction("confirm")');
-    expect(html).toContain('data-i18n="confirmAndClose"');
-    expect(html).toContain('sendAction("request_changes")');
-    expect(html).toContain('sendAction("submit_feedback"');
-    expect(html).toContain('sendAction("select_version")');
-    expect(html).toContain('sendAction("close")');
+    expect(html).not.toContain("window.glimpse.send");
+    expect(html).not.toContain('sendAction("confirm")');
+    expect(html).not.toContain('data-i18n="confirmAndClose"');
+    expect(html).not.toContain('sendAction("submit_feedback"');
+    expect(html).not.toContain('sendAction("request_changes")');
+    expect(html).not.toContain('sendAction("submit_feedback"');
+    expect(html).not.toContain('sendAction("select_version")');
+    expect(html).not.toContain('sendAction("close")');
     expect(html).toContain("prefers-reduced-motion");
     expect(html).toContain(":focus-visible");
   });
 
-  it("isolates zoom to the diagram and keeps feedback scrollable above the footer", () => {
+  it("isolates zoom to the read-only diagram preview", () => {
     const html = buildReviewPanelHtml({
       artifactHtml: "<svg></svg>",
       confirmedVersion: null,
@@ -219,9 +216,9 @@ describe("review panel document", () => {
     });
 
     expect(html).toContain(
-      ".feedback { display: none; flex: none; min-height: 0; max-height: 40%; overflow: auto;",
+      ".content { flex: 1 1 auto; min-height: 0; padding: var(--space); overflow: auto; }",
     );
-    expect(html).toContain(".footer { justify-content: flex-end;");
+    expect(html).toContain(".footer { justify-content: flex-start;");
     expect(html).toContain('frame.style.transform = "scale(" + zoom + ")"');
     expect(html).toContain('frame.style.width = (100 / zoom) + "%"');
     expect(html).toContain('frame.style.height = (100 / zoom) + "%"');
@@ -229,17 +226,19 @@ describe("review panel document", () => {
     expect(html).toContain("Math.min(1.5, Math.max(.8");
     expect(html).toContain("setZoom(1); });");
   });
+});
 
-  it("waits for confirmation and returns the review decision", async () => {
+describe("Pi review interaction", () => {
+  it("uses Pi UI for version selection, confirmation, and feedback", async () => {
     const project = await projectDirectory();
-    await storeVersion(project, "await-review", "version one");
+    await storeVersion(project, "pi-review", "version one");
     const window = new FakeWindow();
+    const sendUserMessage = vi.fn();
     const manager = new DiagramReviewManager(
       {
-        sendUserMessage: vi.fn(),
+        sendUserMessage,
       } as unknown as ExtensionAPI,
       {
-        readyTimeoutMs: 100,
         loadGlimpse: async () => ({
           open: () => {
             setImmediate(() => window.emit("ready", {}));
@@ -248,191 +247,38 @@ describe("review panel document", () => {
         }),
       },
     );
-    const preview = manager.preview(context(project), result("await-review", 1), true);
-    let settled = false;
-    void preview.then(() => {
-      settled = true;
-    });
-
-    await flushMessages();
-    expect(settled).toBe(false);
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "await-review",
+    const ui = {
+      confirm: vi.fn(async () => false),
+      input: vi.fn(async () => "Increase contrast"),
+      select: vi.fn(async () => "v1"),
+    };
+    const preview = await manager.preview(context(project), result("pi-review", 1));
+    expect(preview).toBe("opened");
+    await expect(
+      manager.review(
+        {
+          ...context(project),
+          ui: ui as never,
+        },
+        result("pi-review", 1),
+      ),
+    ).resolves.toEqual({
+      feedback: "Increase contrast",
+      status: "changes_requested",
       version: 1,
     });
-
-    await expect(preview).resolves.toEqual({
-      status: "confirmed",
-      version: 1,
-    });
-    expect(window.closeCount).toBe(1);
-  });
-
-  it("releases waiting reviews on close, cancellation, and replacement", async () => {
-    const project = await projectDirectory();
-    await storeVersion(project, "lifecycle", "version one");
-    const window = new FakeWindow();
-    const manager = new DiagramReviewManager(
-      {
-        sendUserMessage: vi.fn(),
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open: () => {
-            setImmediate(() => window.emit("ready", {}));
-            return window;
-          },
-        }),
-      },
+    expect(ui.select).toHaveBeenCalled();
+    expect(ui.confirm).toHaveBeenCalled();
+    expect(ui.input).toHaveBeenCalled();
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Increase contrast"),
+      undefined,
     );
-
-    const first = manager.preview(context(project), result("lifecycle", 1), true);
-    await flushMessages();
-    await storeVersion(project, "lifecycle", "version two");
-    const second = manager.preview(context(project), result("lifecycle", 2), true);
-    await expect(first).resolves.toEqual({
-      status: "superseded",
-      version: 1,
-    });
-
-    const controller = new AbortController();
-    const third = manager.preview(
-      context(project),
-      result("lifecycle", 2),
-      true,
-      controller.signal,
-    );
-    await expect(second).resolves.toEqual({
-      status: "superseded",
-      version: 2,
-    });
-    controller.abort();
-    await expect(third).resolves.toEqual({
-      status: "cancelled",
-      version: 2,
-    });
-
-    const closed = manager.preview(context(project), result("lifecycle", 2), true);
-    await flushMessages();
-    window.emit("message", {
-      action: "close",
-      diagramId: "lifecycle",
-      version: 1,
-    });
-    await expect(closed).resolves.toEqual({
-      status: "closed",
-      version: 2,
-    });
-  });
-
-  it("releases a waiting review when the host shuts down or the window errors", async () => {
-    const project = await projectDirectory();
-    await storeVersion(project, "shutdown-review", "version one");
-    const shutdownWindow = new FakeWindow();
-    const shutdownManager = new DiagramReviewManager(
-      {
-        sendUserMessage: vi.fn(),
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open: () => {
-            setImmediate(() => shutdownWindow.emit("ready", {}));
-            return shutdownWindow;
-          },
-        }),
-      },
-    );
-    const shutdown = shutdownManager.preview(
-      context(project),
-      result("shutdown-review", 1),
-      true,
-    );
-    await flushMessages();
-    shutdownManager.closeAll();
-    await expect(shutdown).resolves.toEqual({
-      status: "cancelled",
-      version: 1,
-    });
-
-    await storeVersion(project, "error-review", "version one");
-    const errorWindow = new FakeWindow();
-    const errorManager = new DiagramReviewManager(
-      {
-        sendUserMessage: vi.fn(),
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open: () => {
-            setImmediate(() => errorWindow.emit("ready", {}));
-            return errorWindow;
-          },
-        }),
-      },
-    );
-    const failed = errorManager.preview(
-      context(project),
-      result("error-review", 1),
-      true,
-    );
-    await flushMessages();
-    errorWindow.emit("error", new Error("window crashed"));
-    await expect(failed).resolves.toEqual({
-      status: "failed",
-      version: 1,
-    });
-  });
-
-  it("keeps a waiting review open when persistence fails and accepts one retry", async () => {
-    const project = await projectDirectory();
-    await storeVersion(project, "retry-review", "version one");
-    const window = new FakeWindow();
-    let failWrites = false;
-    const writeReviewState = vi.fn(async () => {
-      if (failWrites) throw new Error("disk full");
-    });
-    const manager = new DiagramReviewManager(
-      {
-        sendUserMessage: vi.fn(),
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open: () => {
-            setImmediate(() => window.emit("ready", {}));
-            return window;
-          },
-        }),
-        writeReviewState,
-      },
-    );
-    const preview = manager.preview(context(project), result("retry-review", 1), true);
-    await flushMessages();
-    failWrites = true;
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "retry-review",
-      version: 1,
-    });
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "retry-review",
-      version: 1,
-    });
-    await flushMessages();
-    expect(window.scripts.at(-1)).toContain("Review could not be saved");
-
-    failWrites = false;
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "retry-review",
-      version: 1,
-    });
-    await expect(preview).resolves.toEqual({
-      status: "confirmed",
+    expect(
+      (await readDiagramReviewState(project, "pi-review"))?.latestFeedback,
+    ).toMatchObject({
+      feedback: "Increase contrast",
+      status: "sent",
       version: 1,
     });
   });
@@ -537,141 +383,5 @@ describe("review event validation", () => {
     ).toMatchObject({
       ok: true,
     });
-  });
-});
-
-describe("review panel session", () => {
-  it("reuses one window, persists review state, and routes only feedback", async () => {
-    const project = await projectDirectory();
-    await storeVersion(project, "live-review", "version one");
-    const window = new FakeWindow();
-    const open = vi.fn((_html: string, _options: Record<string, unknown>) => {
-      setImmediate(() =>
-        window.emit("ready", {
-          appearance: {
-            accentColor: "#123456",
-            darkMode: true,
-            increaseContrast: false,
-            reduceMotion: false,
-          },
-        }),
-      );
-      return window;
-    });
-    const sendUserMessage = vi.fn();
-    const manager = new DiagramReviewManager(
-      {
-        sendUserMessage,
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open,
-        }),
-      },
-    );
-
-    await expect(
-      manager.preview(context(project), result("live-review", 1)),
-    ).resolves.toBe("opened");
-    const firstPanelHtml = window.htmlUpdates.at(-1);
-    await storeVersion(project, "live-review", "version two");
-    await expect(
-      manager.preview(context(project), result("live-review", 2)),
-    ).resolves.toBe("opened");
-
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(window.htmlUpdates.at(-1)).not.toBe(firstPanelHtml);
-
-    expect(open).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        height: 600,
-        title: "Diagram live-review",
-        width: 800,
-      }),
-    );
-    expect(open.mock.calls[0]?.[1]).not.toHaveProperty("frameless");
-    expect(open.mock.calls[0]?.[1]).not.toHaveProperty("transparent");
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "live-review",
-      version: 1,
-    });
-    await flushMessages();
-    expect(
-      (await readDiagramReviewState(project, "live-review"))?.confirmedVersion,
-    ).toBeNull();
-
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "live-review",
-      version: 2,
-    });
-    await flushMessages();
-    expect(
-      (await readDiagramReviewState(project, "live-review"))?.confirmedVersion,
-    ).toBe(2);
-    expect(sendUserMessage).not.toHaveBeenCalled();
-
-    window.emit("message", {
-      action: "submit_feedback",
-      diagramId: "live-review",
-      feedback: "Increase the database label contrast.",
-      version: 2,
-    });
-    await flushMessages();
-    expect(sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Diagram live-review v2 review feedback:"),
-    );
-    expect(
-      (await readDiagramReviewState(project, "live-review"))?.latestFeedback,
-    ).toMatchObject({
-      status: "sent",
-      version: 2,
-    });
-
-    expect(window.closeCount).toBe(1);
-    expect(
-      (await readDiagramReviewState(project, "live-review"))?.confirmedVersion,
-    ).toBe(2);
-  });
-  it("steers standalone feedback while the host is busy", async () => {
-    const project = await projectDirectory();
-    await storeVersion(project, "busy-review", "version one");
-    const window = new FakeWindow();
-    const sendUserMessage = vi.fn();
-    const manager = new DiagramReviewManager(
-      {
-        sendUserMessage,
-      } as unknown as ExtensionAPI,
-      {
-        readyTimeoutMs: 100,
-        loadGlimpse: async () => ({
-          open: () => {
-            setImmediate(() => window.emit("ready", {}));
-            return window;
-          },
-        }),
-      },
-    );
-    await expect(
-      manager.preview(context(project, "tui", true, false), result("busy-review", 1)),
-    ).resolves.toBe("opened");
-
-    window.emit("message", {
-      action: "submit_feedback",
-      diagramId: "busy-review",
-      feedback: "Move the cache boundary.",
-      version: 1,
-    });
-    await flushMessages();
-
-    expect(sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Diagram busy-review v1 review feedback:"),
-      {
-        deliverAs: "steer",
-      },
-    );
   });
 });

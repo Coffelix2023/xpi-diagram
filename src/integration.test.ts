@@ -56,7 +56,10 @@ interface TuiToolContext {
   isProjectTrusted: () => boolean;
   mode: "tui";
   ui: {
+    confirm: () => Promise<boolean>;
+    input: () => Promise<string | undefined>;
     notify: () => void;
+    select: () => Promise<string | undefined>;
   };
 }
 
@@ -68,15 +71,12 @@ function tuiContext(cwd: string, isIdle = true): TuiToolContext {
     isIdle: () => isIdle,
     isProjectTrusted: () => true,
     ui: {
+      confirm: vi.fn(async () => true),
+      input: vi.fn(async () => "Show the cache boundary."),
       notify: vi.fn(),
+      select: vi.fn(async () => "v1"),
     },
   };
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  await vi.waitFor(() => {
-    expect(predicate()).toBe(true);
-  });
 }
 
 describe("TUI diagram generation smoke test", () => {
@@ -141,15 +141,12 @@ describe("TUI diagram generation smoke test", () => {
       undefined,
       context,
     );
-    await waitUntil(() => window.scripts.length > 0);
-    window.emit("message", {
-      action: "confirm",
-      diagramId: "smoke",
-      version: 1,
-    });
-    const first = await firstPromise;
 
+    const first = await firstPromise;
     const feedback = `Show the cache boundary. ${"x".repeat(2_500)}`;
+    context.ui.confirm = vi.fn(async () => false);
+    context.ui.input = vi.fn(async () => feedback);
+    context.ui.select = vi.fn(async () => "v2");
     const secondPromise = execute(
       "smoke-v2",
       {
@@ -161,23 +158,7 @@ describe("TUI diagram generation smoke test", () => {
       undefined,
       context,
     );
-    await waitUntil(() => open.mock.calls.length > 1);
-    window.emit("message", {
-      action: "submit_feedback",
-      diagramId: "smoke",
-      feedback,
-      version: 2,
-    });
     const second = await secondPromise;
-    window.emit("message", {
-      action: "submit_feedback",
-      diagramId: "smoke",
-      feedback: "duplicate feedback",
-      version: 2,
-    });
-    await waitUntil(() =>
-      window.scripts.some((script) => script.includes("Review already completed")),
-    );
 
     expect(first.details).toMatchObject({
       path: ".pi/diagram/smoke/v1.html",
@@ -210,7 +191,10 @@ describe("TUI diagram generation smoke test", () => {
       await readFile(join(project, ".pi/diagram/smoke/v2.html"), "utf8"),
     ).toContain("v2");
     expect((await readDiagramReviewState(project, "smoke"))?.confirmedVersion).toBe(1);
-    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Diagram smoke v2 review feedback:"),
+      undefined,
+    );
     expect(tool.executionMode).toBe("sequential");
   });
 });
