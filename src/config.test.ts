@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readDiagramConfig, writeDiagramConfig } from "./config.js";
 
 const CONFIG_DIAGNOSTIC_PATTERN = /preview must be a boolean/;
+const PREVIEW_MODE_DIAGNOSTIC_PATTERN =
+  /previewMode must be either "glimpse" or "browser"/;
 const TRUST_PATTERN = /untrusted/i;
 const temporaryDirectories: string[] = [];
 
@@ -33,6 +35,7 @@ describe("diagram configuration", () => {
       trusted: true,
       config: {
         preview: true,
+        previewMode: "glimpse",
       },
     });
   });
@@ -52,8 +55,62 @@ describe("diagram configuration", () => {
     const result = await readDiagramConfig(project);
     expect(result.config).toEqual({
       preview: true,
+      previewMode: "glimpse",
     });
     expect(result.diagnostic).toMatch(CONFIG_DIAGNOSTIC_PATTERN);
+  });
+
+  it("accepts browser mode and defaults legacy config to Glimpse", async () => {
+    const project = await projectDirectory();
+    await mkdir(join(project, ".pi"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(project, ".pi", "xpi-diagram.json"),
+      '{"preview":false}',
+      "utf8",
+    );
+
+    await expect(readDiagramConfig(project)).resolves.toEqual({
+      trusted: true,
+      config: {
+        preview: false,
+        previewMode: "glimpse",
+      },
+    });
+
+    await writeFile(
+      join(project, ".pi", "xpi-diagram.json"),
+      '{"previewMode":"browser"}',
+      "utf8",
+    );
+    await expect(readDiagramConfig(project)).resolves.toEqual({
+      trusted: true,
+      config: {
+        preview: true,
+        previewMode: "browser",
+      },
+    });
+  });
+
+  it("fails closed for an unsupported preview mode", async () => {
+    const project = await projectDirectory();
+    await mkdir(join(project, ".pi"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(project, ".pi", "xpi-diagram.json"),
+      '{"previewMode":"web"}',
+      "utf8",
+    );
+
+    const result = await readDiagramConfig(project);
+
+    expect(result.config).toEqual({
+      preview: true,
+      previewMode: "glimpse",
+    });
+    expect(result.diagnostic).toMatch(PREVIEW_MODE_DIAGNOSTIC_PATTERN);
   });
 
   it("ignores unknown fields while preserving supported values", async () => {
@@ -63,14 +120,14 @@ describe("diagram configuration", () => {
     });
     await writeFile(
       join(project, ".pi", "xpi-diagram.json"),
-      '{"preview":false,"futureOption":"ignored"}',
+      '{"preview":false,"previewMode":"browser","futureOption":"ignored"}',
       "utf8",
     );
-
     await expect(readDiagramConfig(project)).resolves.toEqual({
       trusted: true,
       config: {
         preview: false,
+        previewMode: "browser",
       },
     });
   });
@@ -82,6 +139,7 @@ describe("diagram configuration", () => {
       trusted: false,
       config: {
         preview: true,
+        previewMode: "glimpse",
       },
     });
     await expect(
@@ -89,6 +147,7 @@ describe("diagram configuration", () => {
         project,
         {
           preview: false,
+          previewMode: "browser",
         },
         false,
       ),
@@ -100,10 +159,22 @@ describe("diagram configuration", () => {
 
     await writeDiagramConfig(project, {
       preview: false,
+      previewMode: "browser",
     });
 
     await expect(
       readFile(join(project, ".pi", "xpi-diagram.json"), "utf8"),
-    ).resolves.toBe('{\n  "preview": false\n}\n');
+    ).resolves.toBe('{\n  "preview": false,\n  "previewMode": "browser"\n}\n');
+  });
+
+  it("rejects an invalid mode before writing", async () => {
+    const project = await projectDirectory();
+
+    await expect(
+      writeDiagramConfig(project, {
+        preview: true,
+        previewMode: "web" as never,
+      }),
+    ).rejects.toThrow(PREVIEW_MODE_DIAGNOSTIC_PATTERN);
   });
 });

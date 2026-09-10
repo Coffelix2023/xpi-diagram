@@ -3,12 +3,19 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 const CONFIG_FILE = ".pi/xpi-diagram.json";
+export const PREVIEW_MODES = [
+  "glimpse",
+  "browser",
+] as const;
+export type PreviewMode = (typeof PREVIEW_MODES)[number];
 const DEFAULT_CONFIG = {
   preview: true,
+  previewMode: "glimpse",
 } as const;
 
 export interface DiagramConfig {
   preview: boolean;
+  previewMode: PreviewMode;
 }
 
 export interface DiagramConfigResult {
@@ -25,6 +32,12 @@ function configPath(projectRoot: string): string {
     throw new Error("xpi-diagram configuration escaped the project directory");
   }
   return target;
+}
+
+function isPreviewMode(value: unknown): value is PreviewMode {
+  return (
+    typeof value === "string" && (PREVIEW_MODES as readonly string[]).includes(value)
+  );
 }
 
 export async function readDiagramConfig(
@@ -44,14 +57,20 @@ export async function readDiagramConfig(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("configuration must be a JSON object");
     }
-    const preview = (parsed as Record<string, unknown>).preview;
+    const values = parsed as Record<string, unknown>;
+    const preview = values.preview;
     if (preview !== undefined && typeof preview !== "boolean") {
       throw new Error("preview must be a boolean");
+    }
+    const previewMode = values.previewMode;
+    if (previewMode !== undefined && !isPreviewMode(previewMode)) {
+      throw new Error('previewMode must be either "glimpse" or "browser"');
     }
     return {
       trusted: true,
       config: {
-        preview: preview ?? true,
+        preview: preview ?? DEFAULT_CONFIG.preview,
+        previewMode: previewMode ?? DEFAULT_CONFIG.previewMode,
       },
     };
   } catch (error) {
@@ -81,6 +100,9 @@ export async function writeDiagramConfig(
   if (!isProjectTrusted) {
     throw new Error("Cannot write xpi-diagram configuration in an untrusted project");
   }
+  if (!isPreviewMode(config.previewMode)) {
+    throw new Error('previewMode must be either "glimpse" or "browser"');
+  }
   const target = configPath(projectRoot);
   const temporary = `${target}.${randomUUID()}.tmp`;
   await mkdir(dirname(target), {
@@ -92,6 +114,7 @@ export async function writeDiagramConfig(
       `${JSON.stringify(
         {
           preview: config.preview,
+          previewMode: config.previewMode,
         },
         null,
         2,
