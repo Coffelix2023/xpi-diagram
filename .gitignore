@@ -14,6 +14,7 @@ coverage/
 
 # xpi-diagram runtime output (versioned diagram artifacts + review state)
 .pi/diagram/
+.pi/xpi-diagram.json
 
 # c6x-config
 **/feedback

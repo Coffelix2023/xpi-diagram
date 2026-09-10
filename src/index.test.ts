@@ -13,7 +13,7 @@ const VISUAL_EXPLANATION_PATTERN = /visual explanation/i;
 const PROSE_OR_TABLE_PATTERN = /prose|table/i;
 const SUPPORTED_TYPES_PATTERN =
   /architecture.*process.*sequence.*state-machine.*entity-relationship/i;
-const COMMAND_DESCRIPTION_PATTERN = /configure.*latest/i;
+const COMMAND_DESCRIPTION_PATTERN = /配置.*最新图表/;
 const STYLE_PATTERN = /style|profile/i;
 const REVIEW_PATTERN = /waits for review|review result/i;
 const REOPEN_PATTERN = /reopen|pending tool|busy/i;
@@ -108,7 +108,7 @@ describe("xpi-diagram command configuration", () => {
     const handler = registeredCommand();
     const ui = {
       notify: vi.fn(),
-      select: vi.fn(async () => "Preview in browser"),
+      select: vi.fn(async () => "预览模式: Glimpse"),
     };
     const ctx = {
       cwd: project,
@@ -126,25 +126,38 @@ describe("xpi-diagram command configuration", () => {
       },
     });
     expect(ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("mode set to browser"),
+      expect.stringContaining("预览模式已切换为 浏览器"),
     );
   });
 
-  it("reports status including the preview mode", async () => {
+  it("toggles automatic preview and offers only three Chinese choices", async () => {
     const project = await projectDirectory();
     const handler = registeredCommand();
     const notify = vi.fn();
+    const select = vi.fn(async () => "自动预览: 已启用");
     const ctx = {
       cwd: project,
       isProjectTrusted: () => true,
       ui: {
         notify,
-        select: vi.fn(async () => "View status"),
+        select,
       },
     } as unknown as ExtensionCommandContext;
 
     await handler("", ctx);
 
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("mode is glimpse"));
+    await expect(readDiagramConfig(project)).resolves.toEqual({
+      trusted: true,
+      config: {
+        preview: false,
+        previewMode: "glimpse",
+      },
+    });
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("自动预览: 已启用"), [
+      "自动预览: 已启用",
+      "预览模式: Glimpse",
+      "重新打开最新图表",
+    ]);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("自动预览已禁用"));
   });
 });

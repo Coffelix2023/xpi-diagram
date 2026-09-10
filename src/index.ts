@@ -5,19 +5,46 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { type PreviewMode, readDiagramConfig, writeDiagramConfig } from "./config.js";
-import { DIAGRAM_TYPES, type DiagramResult, type DiagramType } from "./contracts.js";
+import {
+  DIAGRAM_TYPES,
+  type DiagramResult,
+  type DiagramType,
+  PREVIEW_STATUSES,
+  type PreviewStatus,
+} from "./contracts.js";
 import { previewDiagram, registerDiagramTool } from "./diagram-tool.js";
 import { findLatestDiagram } from "./storage.js";
 
 const VERSION = "0.1.0";
 
-const MENU_STATUS = "View status";
-const MENU_ENABLE = "Enable automatic preview";
-const MENU_DISABLE = "Disable automatic preview";
-const MENU_GLIMPSE = "Preview in Glimpse";
-const MENU_BROWSER = "Preview in browser";
-const MENU_LATEST = "Reopen latest diagram";
+const MENU_LATEST = "重新打开最新图表";
 const DIAGRAM_TYPE_PATTERN = /<svg\b[^>]*\bdata-diagram-type=["']([^"']+)["']/i;
+
+function autoPreviewMenuItem(preview: boolean): string {
+  return `自动预览: ${preview ? "已启用" : "已禁用"}`;
+}
+
+function previewModeLabel(mode: PreviewMode): string {
+  return mode === "glimpse" ? "Glimpse" : "浏览器";
+}
+
+function previewModeMenuItem(mode: PreviewMode): string {
+  return `预览模式: ${previewModeLabel(mode)}`;
+}
+
+function previewStatusLabel(status: PreviewStatus): string {
+  if (status === PREVIEW_STATUSES[1]) return "已禁用";
+  switch (status) {
+    case "not-attempted":
+      return "未尝试";
+    case "opened":
+      return "已打开";
+    case "unavailable":
+      return "不可用";
+    case "failed":
+      return "失败";
+  }
+}
 
 function storedDiagramType(html: string): DiagramType {
   const value = html.match(DIAGRAM_TYPE_PATTERN)?.[1];
@@ -33,7 +60,8 @@ async function reopenLatest(
   try {
     const latest = await findLatestDiagram(ctx.cwd);
     if (!latest) {
-      ctx.ui.notify("No saved diagrams found.", "warning");
+      // biome-ignore lint/security/noSecrets: user-facing notification text is not a secret
+      ctx.ui.notify("未找到已保存的图表。", "warning");
       return;
     }
     const html = await readFile(latest.path, "utf8");
@@ -50,7 +78,7 @@ async function reopenLatest(
     const configuration = await readDiagramConfig(ctx.cwd, ctx.isProjectTrusted());
     if (configuration.diagnostic) ctx.ui.notify(configuration.diagnostic, "warning");
     if (!configuration.config.preview) {
-      diagram.previewStatus = "disabled";
+      diagram.previewStatus = PREVIEW_STATUSES[1];
     } else {
       await previewDiagram(
         ctx,
@@ -60,13 +88,10 @@ async function reopenLatest(
       );
     }
     ctx.ui.notify(
-      `Reopened ${diagram.diagramId} v${diagram.version} (${diagram.previewStatus}).`,
+      `已重新打开图表 ${diagram.diagramId} v${diagram.version}（预览状态：${previewStatusLabel(diagram.previewStatus)}）。`,
     );
   } catch (error) {
-    ctx.ui.notify(
-      `Could not reopen latest diagram: ${(error as Error).message}`,
-      "error",
-    );
+    ctx.ui.notify(`重新打开最新图表失败：${(error as Error).message}`, "error");
   }
 }
 
@@ -78,59 +103,52 @@ async function handleDiagramCommand(
   const configuration = await readDiagramConfig(ctx.cwd, trusted);
   if (configuration.diagnostic) ctx.ui.notify(configuration.diagnostic, "warning");
   const config = configuration.config;
-  const status = config.preview ? "enabled" : "disabled";
+  const autoPreviewChoice = autoPreviewMenuItem(config.preview);
+  const previewModeChoice = previewModeMenuItem(config.previewMode);
   const choice = await ctx.ui.select(
-    `xpi-diagram ${VERSION} · automatic preview: ${status}, mode: ${config.previewMode}`,
+    `xpi-diagram ${VERSION} · ${autoPreviewChoice} · ${previewModeChoice}`,
     [
-      MENU_STATUS,
-      MENU_ENABLE,
-      MENU_DISABLE,
-      MENU_GLIMPSE,
-      MENU_BROWSER,
+      autoPreviewChoice,
+      previewModeChoice,
       MENU_LATEST,
     ],
   );
-  if (!choice || choice === MENU_STATUS) {
-    if (choice === MENU_STATUS)
-      ctx.ui.notify(`Automatic preview is ${status}; mode is ${config.previewMode}.`);
-    return;
-  }
+  if (!choice) return;
   if (choice === MENU_LATEST) {
     await reopenLatest(ctx, reviewManager);
     return;
   }
-  let preview: boolean | undefined;
-  let previewMode: PreviewMode | undefined;
-  if (choice === MENU_ENABLE) preview = true;
-  else if (choice === MENU_DISABLE) preview = false;
-  else previewMode = choice === MENU_BROWSER ? "browser" : "glimpse";
+
+  let preview = config.preview;
+  let previewMode = config.previewMode;
+  if (choice === autoPreviewChoice) preview = !config.preview;
+  else if (choice === previewModeChoice)
+    previewMode = config.previewMode === "glimpse" ? "browser" : "glimpse";
+  else return;
+
   try {
     await writeDiagramConfig(
       ctx.cwd,
       {
-        preview: preview ?? config.preview,
-        previewMode: previewMode ?? config.previewMode,
+        preview,
+        previewMode,
       },
       trusted,
     );
-    let changed: string;
-    if (preview === undefined) changed = `mode set to ${previewMode}`;
-    else changed = preview ? "enabled" : "disabled";
-    ctx.ui.notify(
-      `Automatic preview ${changed} (mode: ${previewMode ?? config.previewMode}).`,
-    );
+    const changed =
+      choice === autoPreviewChoice
+        ? `自动预览已${preview ? "启用" : "禁用"}`
+        : `预览模式已切换为 ${previewModeLabel(previewMode)}`;
+    ctx.ui.notify(`${changed}。当前预览模式：${previewModeLabel(previewMode)}。`);
   } catch (error) {
-    ctx.ui.notify(
-      `Could not update xpi-diagram configuration: ${(error as Error).message}`,
-      "error",
-    );
+    ctx.ui.notify(`更新 xpi-diagram 配置失败：${(error as Error).message}`, "error");
   }
 }
 
 export default function xpiDiagram(pi: ExtensionAPI): void {
   const reviewManager = registerDiagramTool(pi);
   pi.registerCommand("xpi-diagram", {
-    description: "Configure diagram preview or reopen the latest diagram",
+    description: "配置图表预览或重新打开最新图表",
     handler: async (_args, ctx) => {
       await handleDiagramCommand(ctx, reviewManager);
     },
