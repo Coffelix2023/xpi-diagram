@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readDiagramConfig, writeDiagramConfig } from "./config.js";
+import { diagramConfigPath, readDiagramConfig, writeDiagramConfig } from "./config.js";
 
 const CONFIG_DIAGNOSTIC_PATTERN = /preview must be a boolean/;
 const PREVIEW_MODE_DIAGNOSTIC_PATTERN =
   /previewMode must be either "glimpse" or "browser"/;
-const TRUST_PATTERN = /untrusted/i;
+const LANGUAGE_DIAGNOSTIC_PATTERN = /language must be either "zh-CN" or "en"/;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -21,160 +21,140 @@ afterEach(async () => {
   );
 });
 
-async function projectDirectory(): Promise<string> {
+async function globalDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "xpi-diagram-config-test-"));
   temporaryDirectories.push(directory);
   return directory;
 }
 
 describe("diagram configuration", () => {
-  it("defaults to enabled when no project config exists", async () => {
-    const project = await projectDirectory();
+  it("defaults to enabled in Simplified Chinese when no global config exists", async () => {
+    const agentDirectory = await globalDirectory();
 
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
+    await expect(readDiagramConfig(agentDirectory)).resolves.toEqual({
       config: {
+        language: "zh-CN",
         preview: true,
         previewMode: "glimpse",
       },
     });
   });
 
-  it("uses defaults and reports malformed or unsupported config values", async () => {
-    const project = await projectDirectory();
+  it("ignores project-local config and reports malformed global values", async () => {
+    const agentDirectory = await globalDirectory();
+    const project = await globalDirectory();
     await mkdir(join(project, ".pi"), {
       recursive: true,
     });
-    await writeFile(join(project, ".pi-config.json"), "{}", "utf8");
     await writeFile(
       join(project, ".pi", "xpi-diagram.json"),
-      '{"preview":"yes"}',
+      '{"preview":false,"language":"en"}',
       "utf8",
     );
+    await writeFile(diagramConfigPath(agentDirectory), '{"preview":"yes"}', "utf8");
 
-    const result = await readDiagramConfig(project);
+    const result = await readDiagramConfig(agentDirectory);
+
     expect(result.config).toEqual({
+      language: "zh-CN",
       preview: true,
       previewMode: "glimpse",
     });
     expect(result.diagnostic).toMatch(CONFIG_DIAGNOSTIC_PATTERN);
   });
 
-  it("accepts browser mode and defaults legacy config to Glimpse", async () => {
-    const project = await projectDirectory();
-    await mkdir(join(project, ".pi"), {
-      recursive: true,
-    });
+  it("accepts English and browser mode", async () => {
+    const agentDirectory = await globalDirectory();
     await writeFile(
-      join(project, ".pi", "xpi-diagram.json"),
-      '{"preview":false}',
+      diagramConfigPath(agentDirectory),
+      '{"language":"en","preview":false,"previewMode":"browser"}',
       "utf8",
     );
 
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
+    await expect(readDiagramConfig(agentDirectory)).resolves.toEqual({
       config: {
+        language: "en",
         preview: false,
-        previewMode: "glimpse",
-      },
-    });
-
-    await writeFile(
-      join(project, ".pi", "xpi-diagram.json"),
-      '{"previewMode":"browser"}',
-      "utf8",
-    );
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
-      config: {
-        preview: true,
         previewMode: "browser",
       },
     });
   });
 
-  it("fails closed for an unsupported preview mode", async () => {
-    const project = await projectDirectory();
-    await mkdir(join(project, ".pi"), {
-      recursive: true,
-    });
+  it("fails closed for unsupported language and preview mode", async () => {
+    const agentDirectory = await globalDirectory();
     await writeFile(
-      join(project, ".pi", "xpi-diagram.json"),
-      '{"previewMode":"web"}',
+      diagramConfigPath(agentDirectory),
+      '{"language":"fr","previewMode":"web"}',
       "utf8",
     );
 
-    const result = await readDiagramConfig(project);
+    const result = await readDiagramConfig(agentDirectory);
 
     expect(result.config).toEqual({
+      language: "zh-CN",
       preview: true,
       previewMode: "glimpse",
     });
-    expect(result.diagnostic).toMatch(PREVIEW_MODE_DIAGNOSTIC_PATTERN);
+    expect(result.diagnostic).toMatch(LANGUAGE_DIAGNOSTIC_PATTERN);
   });
 
   it("ignores unknown fields while preserving supported values", async () => {
-    const project = await projectDirectory();
-    await mkdir(join(project, ".pi"), {
-      recursive: true,
-    });
+    const agentDirectory = await globalDirectory();
     await writeFile(
-      join(project, ".pi", "xpi-diagram.json"),
-      '{"preview":false,"previewMode":"browser","futureOption":"ignored"}',
+      diagramConfigPath(agentDirectory),
+      '{"language":"en","preview":false,"previewMode":"browser","futureOption":"ignored"}',
       "utf8",
     );
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
+
+    await expect(readDiagramConfig(agentDirectory)).resolves.toEqual({
       config: {
+        language: "en",
         preview: false,
         previewMode: "browser",
       },
     });
   });
 
-  it("does not apply or write project config when the project is untrusted", async () => {
-    const project = await projectDirectory();
+  it("writes only the normalized global config atomically", async () => {
+    const agentDirectory = await globalDirectory();
 
-    await expect(readDiagramConfig(project, false)).resolves.toEqual({
-      trusted: false,
-      config: {
-        preview: true,
-        previewMode: "glimpse",
+    await writeDiagramConfig(
+      {
+        language: "en",
+        preview: false,
+        previewMode: "browser",
       },
-    });
+      agentDirectory,
+    );
+
+    await expect(readFile(diagramConfigPath(agentDirectory), "utf8")).resolves.toBe(
+      '{\n  "language": "en",\n  "preview": false,\n  "previewMode": "browser"\n}\n',
+    );
+  });
+
+  it("rejects an invalid language or mode before writing", async () => {
+    const agentDirectory = await globalDirectory();
+
     await expect(
       writeDiagramConfig(
-        project,
         {
-          preview: false,
-          previewMode: "browser",
+          language: "fr" as never,
+          preview: true,
+          previewMode: "glimpse",
         },
-        false,
+        agentDirectory,
       ),
-    ).rejects.toThrow(TRUST_PATTERN);
-  });
-
-  it("writes only the normalized config atomically", async () => {
-    const project = await projectDirectory();
-
-    await writeDiagramConfig(project, {
-      preview: false,
-      previewMode: "browser",
-    });
+    ).rejects.toThrow(LANGUAGE_DIAGNOSTIC_PATTERN);
 
     await expect(
-      readFile(join(project, ".pi", "xpi-diagram.json"), "utf8"),
-    ).resolves.toBe('{\n  "preview": false,\n  "previewMode": "browser"\n}\n');
-  });
-
-  it("rejects an invalid mode before writing", async () => {
-    const project = await projectDirectory();
-
-    await expect(
-      writeDiagramConfig(project, {
-        preview: true,
-        previewMode: "web" as never,
-      }),
+      writeDiagramConfig(
+        {
+          language: "zh-CN",
+          preview: true,
+          previewMode: "web" as never,
+        },
+        agentDirectory,
+      ),
     ).rejects.toThrow(PREVIEW_MODE_DIAGNOSTIC_PATTERN);
   });
 });

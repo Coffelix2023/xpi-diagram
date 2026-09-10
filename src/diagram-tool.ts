@@ -114,10 +114,7 @@ export function registerDiagramTool(
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       const details = await createDiagramResult(ctx.cwd, params);
       if (details.validationStatus === "passed") {
-        const configuration = await readDiagramConfig(
-          ctx.cwd,
-          ctx.isProjectTrusted?.() ?? true,
-        );
+        const configuration = await readDiagramConfig();
         if (configuration.diagnostic) {
           ctx.ui.notify(configuration.diagnostic, "warning");
         }

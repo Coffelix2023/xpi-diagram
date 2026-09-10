@@ -1,19 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const CONFIG_FILE = ".pi/xpi-diagram.json";
+const CONFIG_FILE = "xpi-diagram.json";
 export const PREVIEW_MODES = [
   "glimpse",
   "browser",
 ] as const;
 export type PreviewMode = (typeof PREVIEW_MODES)[number];
+export const UI_LANGUAGES = [
+  "zh-CN",
+  "en",
+] as const;
+export type UiLanguage = (typeof UI_LANGUAGES)[number];
 const DEFAULT_CONFIG = {
+  language: "zh-CN",
   preview: true,
   previewMode: "glimpse",
 } as const;
 
 export interface DiagramConfig {
+  language: UiLanguage;
   preview: boolean;
   previewMode: PreviewMode;
 }
@@ -21,17 +29,10 @@ export interface DiagramConfig {
 export interface DiagramConfigResult {
   config: DiagramConfig;
   diagnostic?: string;
-  trusted: boolean;
 }
 
-function configPath(projectRoot: string): string {
-  const root = resolve(projectRoot);
-  const target = join(root, CONFIG_FILE);
-  const projectRelative = relative(root, target);
-  if (projectRelative.startsWith("..") || projectRelative.startsWith("/")) {
-    throw new Error("xpi-diagram configuration escaped the project directory");
-  }
-  return target;
+function configPath(agentDir: string): string {
+  return join(resolve(agentDir), CONFIG_FILE);
 }
 
 function isPreviewMode(value: unknown): value is PreviewMode {
@@ -40,24 +41,25 @@ function isPreviewMode(value: unknown): value is PreviewMode {
   );
 }
 
+function isUiLanguage(value: unknown): value is UiLanguage {
+  return (
+    typeof value === "string" && (UI_LANGUAGES as readonly string[]).includes(value)
+  );
+}
+
 export async function readDiagramConfig(
-  projectRoot: string,
-  isProjectTrusted = true,
+  agentDir = getAgentDir(),
 ): Promise<DiagramConfigResult> {
-  if (!isProjectTrusted) {
-    return {
-      trusted: false,
-      config: {
-        ...DEFAULT_CONFIG,
-      },
-    };
-  }
   try {
-    const parsed: unknown = JSON.parse(await readFile(configPath(projectRoot), "utf8"));
+    const parsed: unknown = JSON.parse(await readFile(configPath(agentDir), "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("configuration must be a JSON object");
     }
     const values = parsed as Record<string, unknown>;
+    const language = values.language;
+    if (language !== undefined && !isUiLanguage(language)) {
+      throw new Error('language must be either "zh-CN" or "en"');
+    }
     const preview = values.preview;
     if (preview !== undefined && typeof preview !== "boolean") {
       throw new Error("preview must be a boolean");
@@ -67,8 +69,8 @@ export async function readDiagramConfig(
       throw new Error('previewMode must be either "glimpse" or "browser"');
     }
     return {
-      trusted: true,
       config: {
+        language: language ?? DEFAULT_CONFIG.language,
         preview: preview ?? DEFAULT_CONFIG.preview,
         previewMode: previewMode ?? DEFAULT_CONFIG.previewMode,
       },
@@ -76,7 +78,6 @@ export async function readDiagramConfig(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {
-        trusted: true,
         config: {
           ...DEFAULT_CONFIG,
         },
@@ -84,7 +85,6 @@ export async function readDiagramConfig(
     }
     return {
       diagnostic: `Invalid xpi-diagram configuration: ${(error as Error).message}`,
-      trusted: true,
       config: {
         ...DEFAULT_CONFIG,
       },
@@ -93,17 +93,16 @@ export async function readDiagramConfig(
 }
 
 export async function writeDiagramConfig(
-  projectRoot: string,
   config: DiagramConfig,
-  isProjectTrusted = true,
+  agentDir = getAgentDir(),
 ): Promise<void> {
-  if (!isProjectTrusted) {
-    throw new Error("Cannot write xpi-diagram configuration in an untrusted project");
+  if (!isUiLanguage(config.language)) {
+    throw new Error('language must be either "zh-CN" or "en"');
   }
   if (!isPreviewMode(config.previewMode)) {
     throw new Error('previewMode must be either "glimpse" or "browser"');
   }
-  const target = configPath(projectRoot);
+  const target = configPath(agentDir);
   const temporary = `${target}.${randomUUID()}.tmp`;
   await mkdir(dirname(target), {
     recursive: true,
@@ -113,6 +112,7 @@ export async function writeDiagramConfig(
       temporary,
       `${JSON.stringify(
         {
+          language: config.language,
           preview: config.preview,
           previewMode: config.previewMode,
         },
@@ -133,4 +133,5 @@ export async function writeDiagramConfig(
   }
 }
 
-export const diagramConfigPath = configPath;
+export const diagramConfigPath = (agentDir = getAgentDir()): string =>
+  configPath(agentDir);

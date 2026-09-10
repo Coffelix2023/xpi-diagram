@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync } from "node:fs";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -6,7 +7,12 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readDiagramConfig } from "./config.js";
+import { diagramConfigPath, readDiagramConfig } from "./config.js";
+import type {
+  DiagramConfigPanel,
+  DiagramConfigPanelResult,
+  PanelTheme,
+} from "./config-panel.js";
 import xpiDiagram from "./index.js";
 
 const VISUAL_EXPLANATION_PATTERN = /visual explanation/i;
@@ -19,8 +25,11 @@ const REVIEW_PATTERN = /waits for review|review result/i;
 const REOPEN_PATTERN = /reopen|pending tool|busy/i;
 
 const temporaryDirectories: string[] = [];
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 
 afterEach(async () => {
+  if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
       rm(directory, {
@@ -31,12 +40,12 @@ afterEach(async () => {
   );
 });
 
-async function projectDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "xpi-diagram-index-test-"));
+function globalDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "xpi-diagram-global-test-"));
   temporaryDirectories.push(directory);
+  process.env.PI_CODING_AGENT_DIR = directory;
   return directory;
 }
-
 function registeredCommand(): (
   args: string,
   ctx: ExtensionCommandContext,
@@ -95,48 +104,45 @@ describe("xpi-diagram registration", () => {
 });
 
 describe("xpi-diagram command configuration", () => {
-  it("persists the selected preview mode and keeps the preview toggle", async () => {
-    const project = await projectDirectory();
-    await mkdir(join(project, ".pi"), {
-      recursive: true,
-    });
-    await writeFile(
-      join(project, ".pi", "xpi-diagram.json"),
-      '{"preview":false}',
-      "utf8",
-    );
+  it("saves the toggled preview mode to the global config and leaves no project config", async () => {
+    const global = globalDirectory();
+    const project = mkdtempSync(join(tmpdir(), "xpi-diagram-index-test-"));
+    temporaryDirectories.push(project);
     const handler = registeredCommand();
     const ui = {
       notify: vi.fn(),
-      select: vi.fn(async () => "预览模式: Glimpse"),
+      select: vi.fn(async () => "预览模式：Glimpse"),
     };
     const ctx = {
       cwd: project,
+      mode: "rpc",
       isProjectTrusted: () => true,
       ui,
     } as unknown as ExtensionCommandContext;
 
     await handler("", ctx);
 
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
+    await expect(readDiagramConfig(global)).resolves.toEqual({
       config: {
-        preview: false,
+        language: "zh-CN",
+        preview: true,
         previewMode: "browser",
       },
     });
-    expect(ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("预览模式已切换为 浏览器"),
-    );
+    expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("预览模式：浏览器"));
+    expect(existsSync(join(project, ".pi", "xpi-diagram.json"))).toBe(false);
   });
 
-  it("toggles automatic preview and offers only three Chinese choices", async () => {
-    const project = await projectDirectory();
+  it("toggles automatic preview through the legacy selector", async () => {
+    const global = globalDirectory();
+    const project = mkdtempSync(join(tmpdir(), "xpi-diagram-index-test-"));
+    temporaryDirectories.push(project);
     const handler = registeredCommand();
     const notify = vi.fn();
-    const select = vi.fn(async () => "自动预览: 已启用");
+    const select = vi.fn(async () => "自动预览：开");
     const ctx = {
       cwd: project,
+      mode: "rpc",
       isProjectTrusted: () => true,
       ui: {
         notify,
@@ -146,18 +152,125 @@ describe("xpi-diagram command configuration", () => {
 
     await handler("", ctx);
 
-    await expect(readDiagramConfig(project)).resolves.toEqual({
-      trusted: true,
+    await expect(readDiagramConfig(global)).resolves.toEqual({
       config: {
+        language: "zh-CN",
         preview: false,
         previewMode: "glimpse",
       },
     });
-    expect(select).toHaveBeenCalledWith(expect.stringContaining("自动预览: 已启用"), [
-      "自动预览: 已启用",
-      "预览模式: Glimpse",
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("xpi-diagram 配置"), [
+      "自动预览：开",
+      "预览模式：Glimpse",
+      "显示语言：简体中文",
       "重新打开最新图表",
     ]);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("自动预览已禁用"));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("自动预览：关"));
+  });
+
+  it("writes the TUI panel draft only after the panel closes", async () => {
+    const global = globalDirectory();
+    const project = mkdtempSync(join(tmpdir(), "xpi-diagram-index-test-"));
+    temporaryDirectories.push(project);
+    const handler = registeredCommand();
+    let panelResult: DiagramConfigPanelResult | undefined;
+    const custom = vi.fn(
+      async (
+        factory: (
+          _tui: unknown,
+          theme: PanelTheme,
+          _keybindings: unknown,
+          done: (result: DiagramConfigPanelResult | undefined) => void,
+        ) => DiagramConfigPanel,
+      ) => {
+        let result: DiagramConfigPanelResult | undefined;
+        const panel = factory(
+          undefined,
+          {
+            bold: (t: string) => t,
+            fg: (_c: string, t: string) => t,
+          },
+          undefined,
+          (value) => {
+            result = value;
+          },
+        );
+        panel.handleInput(" ");
+        expect(result).toBeUndefined();
+        panel.handleInput("\r");
+        panelResult = result;
+        return panel;
+      },
+    );
+    const notify = vi.fn();
+    const ctx = {
+      cwd: project,
+      mode: "tui",
+      isProjectTrusted: () => true,
+      ui: {
+        notify,
+        custom,
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await handler("", ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(panelResult?.config).toEqual({
+      language: "zh-CN",
+      preview: false,
+      previewMode: "glimpse",
+    });
+    await expect(readDiagramConfig(global)).resolves.toEqual({
+      config: {
+        language: "zh-CN",
+        preview: false,
+        previewMode: "glimpse",
+      },
+    });
+    expect(existsSync(join(project, ".pi", "xpi-diagram.json"))).toBe(false);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("配置已保存"));
+  });
+
+  it("keeps the global config untouched when the TUI panel is cancelled", async () => {
+    const global = globalDirectory();
+    const project = mkdtempSync(join(tmpdir(), "xpi-diagram-index-test-"));
+    temporaryDirectories.push(project);
+    await writeFile(diagramConfigPath(global), '{"preview":false}', "utf8");
+    const handler = registeredCommand();
+    const custom = vi.fn(
+      async (
+        factory: (
+          _tui: unknown,
+          _theme: unknown,
+          _keybindings: unknown,
+          done: (result: DiagramConfigPanelResult | undefined) => void,
+        ) => unknown,
+      ) => {
+        factory(undefined, undefined, undefined, () => undefined);
+        return undefined;
+      },
+    );
+    const notify = vi.fn();
+    const ctx = {
+      cwd: project,
+      mode: "tui",
+      isProjectTrusted: () => true,
+      ui: {
+        notify,
+        custom,
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await handler("", ctx);
+
+    await expect(readDiagramConfig(global)).resolves.toEqual({
+      config: {
+        language: "zh-CN",
+        preview: false,
+        previewMode: "glimpse",
+      },
+    });
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("配置已保存"));
   });
 });
