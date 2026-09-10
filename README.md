@@ -24,9 +24,9 @@ Design principles:
 
 ## Diagram workflow
 
-- `create_diagram` validates and saves a version before opening the Glimpse preview. With interactive preview enabled, the tool remains pending until a review ends: `Confirm & close` accepts the current version and closes the panel, `Request changes` only opens feedback, and `Close` or cancel does not confirm. The tool result includes the review status, version, and complete feedback text.
+- `create_diagram` validates and saves a version before opening the configured preview. Both preview modes are read-only: the Glimpse window and the system browser only display the saved diagram. The review itself runs in the Pi editor panel — version selection, confirm, and feedback. Confirming accepts a version; canceling or closing does not. The tool result includes the review status, version, and complete feedback text.
 - Choose the diagram type and layout that best communicate the purpose. Apply the selected `diagram-design` type reference and its accessibility, connector, complexity, color, typography, density, and motion rules. The Glimpse window theme is separate from the diagram style; do not add a style selector or invent a brand profile.
-- `/xpi-diagram` manages preview configuration and reopens the latest saved diagram without waiting for review. When no tool is waiting, feedback is delivered through the host when it is idle or steered when it is busy. Disabled preview, headless mode, and unavailable Glimpse return the saved result directly.
+- `/xpi-diagram` manages preview configuration (enable/disable, preview mode `glimpse` or `browser`) and reopens the latest saved diagram without waiting for review. Browser preview opens the saved HTML with the platform's native opener (`open`/`xdg-open`/`start`) and returns immediately. When no tool is waiting, feedback is delivered through the host when it is idle or steered when it is busy. Disabled preview, headless mode, an unsupported platform, or a failed launch return the saved result directly — the artifact is never lost.
 ## Tech stack
 
 - [Node.js](https://nodejs.org/) + [pnpm](https://pnpm.io/), versions pinned in [`mise.toml`](./mise.toml)
@@ -73,7 +73,7 @@ Inside a running Pi session, use `/reload` to hot-reload the extension.
 
 | Command | Description |
 | :--- | :--- |
-| `/xpi-diagram` | Display the extension status and version notification |
+| `/xpi-diagram` | Configure diagram preview (enable/disable, `glimpse`/`browser` mode) or reopen the latest diagram |
 
 ## Development
 

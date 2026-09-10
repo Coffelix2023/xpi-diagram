@@ -1,36 +1,35 @@
 ## Purpose
-
-让用户在 Glimpse 原生窗口中直接查看、确认和反馈图表，使图表审阅成为连续的可视化交互，而不是在终端与预览窗口之间往返。
+让用户在只读预览窗口（Glimpse 或系统浏览器）中查看图表，并通过 Pi 编辑器面板完成确认与反馈，使预览展示与审阅交互各司其职。
 
 
 ## Requirements
 
 
-### Requirement: Valid diagrams open in the Glimpse review panel
-The system SHALL open a validated diagram in a Glimpse panel by default when the runtime has dialog-capable UI and the preview setting is enabled.
+### Requirement: Valid diagrams open in the read-only preview
+The system SHALL open a validated diagram in the configured read-only preview (Glimpse by default) when the runtime has dialog-capable UI and the preview setting is enabled.
 
 #### Scenario: Default preview is enabled
 - **WHEN** a validated diagram is saved in a UI-capable runtime
-- **THEN** the system SHALL open the diagram in Glimpse automatically and show its diagram identifier and version
+- **THEN** the system SHALL open the diagram in the configured preview mode automatically and show its diagram identifier and version
 
-#### Scenario: Glimpse is unavailable
-- **WHEN** Glimpse cannot be loaded, started, or rendered
+#### Scenario: Preview is unavailable
+- **WHEN** Glimpse cannot be loaded or started, or the browser opener is unsupported or fails
 - **THEN** the system SHALL preserve the saved artifact, report the preview failure, and provide its path without failing diagram generation
 
-### Requirement: Review actions stay inside Glimpse
-The Glimpse panel SHALL provide preview, zoom, version navigation, confirm, request-changes, submit-feedback, and close actions without requiring terminal editor selection.
+### Requirement: Review actions stay in the Pi editor panel
+The Pi editor panel SHALL drive review via `ctx.ui.*`: version selection, confirm, and feedback entry. The preview window SHALL offer no confirm, feedback, or version actions.
 
 #### Scenario: User confirms a version
-- **WHEN** the user selects Confirm in Glimpse
-- **THEN** the system SHALL record the confirmed diagram identifier and version and SHALL not trigger another Agent turn
+- **WHEN** the user confirms a version in the Pi editor panel
+- **THEN** the system SHALL record the confirmed diagram identifier and version and close the preview window
 
 #### Scenario: User submits requested changes
-- **WHEN** the user enters feedback and selects Submit feedback
+- **WHEN** the user enters feedback in the Pi editor panel
 - **THEN** the system SHALL send the feedback to the active Pi session with the diagram identifier and version, then keep or update the same review context for the next version
 
-#### Scenario: User closes the panel
-- **WHEN** the user selects Close or closes the window
-- **THEN** the system SHALL close the preview only, retain all saved versions, and SHALL NOT interpret closure as confirmation
+#### Scenario: User closes or cancels
+- **WHEN** the user closes the preview window or cancels the panel prompt
+- **THEN** the system SHALL close the preview only, retain all saved versions, and SHALL NOT interpret closure or cancellation as confirmation
 
 ### Requirement: Review messages are treated as untrusted content
 The panel SHALL send only fixed action events plus escaped user feedback to the Pi session, and diagram HTML/SVG content SHALL NOT be executable as panel commands.
