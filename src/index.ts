@@ -4,9 +4,9 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { readDiagramConfig, writeDiagramConfig } from "./config.js";
+import { type PreviewMode, readDiagramConfig, writeDiagramConfig } from "./config.js";
 import { DIAGRAM_TYPES, type DiagramResult, type DiagramType } from "./contracts.js";
-import { registerDiagramTool } from "./diagram-tool.js";
+import { previewDiagram, registerDiagramTool } from "./diagram-tool.js";
 import { findLatestDiagram } from "./storage.js";
 
 const VERSION = "0.1.0";
@@ -14,6 +14,8 @@ const VERSION = "0.1.0";
 const MENU_STATUS = "View status";
 const MENU_ENABLE = "Enable automatic preview";
 const MENU_DISABLE = "Disable automatic preview";
+const MENU_GLIMPSE = "Preview in Glimpse";
+const MENU_BROWSER = "Preview in browser";
 const MENU_LATEST = "Reopen latest diagram";
 const DIAGRAM_TYPE_PATTERN = /<svg\b[^>]*\bdata-diagram-type=["']([^"']+)["']/i;
 
@@ -45,8 +47,21 @@ async function reopenLatest(
       validationStatus: "passed",
       version: latest.version,
     };
-    const status = await reviewManager.preview(ctx, diagram);
-    ctx.ui.notify(`Reopened ${diagram.diagramId} v${diagram.version} (${status}).`);
+    const configuration = await readDiagramConfig(ctx.cwd, ctx.isProjectTrusted());
+    if (configuration.diagnostic) ctx.ui.notify(configuration.diagnostic, "warning");
+    if (!configuration.config.preview) {
+      diagram.previewStatus = "disabled";
+    } else {
+      await previewDiagram(
+        ctx,
+        diagram,
+        configuration.config.previewMode,
+        reviewManager,
+      );
+    }
+    ctx.ui.notify(
+      `Reopened ${diagram.diagramId} v${diagram.version} (${diagram.previewStatus}).`,
+    );
   } catch (error) {
     ctx.ui.notify(
       `Could not reopen latest diagram: ${(error as Error).message}`,
@@ -62,35 +77,48 @@ async function handleDiagramCommand(
   const trusted = ctx.isProjectTrusted();
   const configuration = await readDiagramConfig(ctx.cwd, trusted);
   if (configuration.diagnostic) ctx.ui.notify(configuration.diagnostic, "warning");
-  const status = configuration.config.preview ? "enabled" : "disabled";
+  const config = configuration.config;
+  const status = config.preview ? "enabled" : "disabled";
   const choice = await ctx.ui.select(
-    `xpi-diagram ${VERSION} · automatic preview: ${status}`,
+    `xpi-diagram ${VERSION} · automatic preview: ${status}, mode: ${config.previewMode}`,
     [
       MENU_STATUS,
       MENU_ENABLE,
       MENU_DISABLE,
+      MENU_GLIMPSE,
+      MENU_BROWSER,
       MENU_LATEST,
     ],
   );
   if (!choice || choice === MENU_STATUS) {
     if (choice === MENU_STATUS)
-      ctx.ui.notify(`Automatic Glimpse preview is ${status}.`);
+      ctx.ui.notify(`Automatic preview is ${status}; mode is ${config.previewMode}.`);
     return;
   }
   if (choice === MENU_LATEST) {
     await reopenLatest(ctx, reviewManager);
     return;
   }
-  const preview = choice === MENU_ENABLE;
+  let preview: boolean | undefined;
+  let previewMode: PreviewMode | undefined;
+  if (choice === MENU_ENABLE) preview = true;
+  else if (choice === MENU_DISABLE) preview = false;
+  else previewMode = choice === MENU_BROWSER ? "browser" : "glimpse";
   try {
     await writeDiagramConfig(
       ctx.cwd,
       {
-        preview,
+        preview: preview ?? config.preview,
+        previewMode: previewMode ?? config.previewMode,
       },
       trusted,
     );
-    ctx.ui.notify(`Automatic Glimpse preview ${preview ? "enabled" : "disabled"}.`);
+    let changed: string;
+    if (preview === undefined) changed = `mode set to ${previewMode}`;
+    else changed = preview ? "enabled" : "disabled";
+    ctx.ui.notify(
+      `Automatic preview ${changed} (mode: ${previewMode ?? config.previewMode}).`,
+    );
   } catch (error) {
     ctx.ui.notify(
       `Could not update xpi-diagram configuration: ${(error as Error).message}`,
