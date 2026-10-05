@@ -11,6 +11,7 @@ dist/
 __pycache__/
 .venv/
 coverage/
+.vitest/
 
 # xpi-diagram runtime output (versioned diagram artifacts + review state)
 .pi/diagram/
