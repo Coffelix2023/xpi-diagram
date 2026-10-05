@@ -31,6 +31,14 @@ The Pi editor panel SHALL drive review via `ctx.ui.*`: version selection, confir
 - **WHEN** the user closes the preview window or cancels the panel prompt
 - **THEN** the system SHALL close the preview only, retain all saved versions, and SHALL NOT interpret closure or cancellation as confirmation
 
+#### Scenario: Tool call is cancelled
+- **WHEN** the tool call that opened the preview is aborted while the panel is asking for a version, a confirmation, or feedback
+- **THEN** the system SHALL dismiss the panel prompt, close that diagram's preview window, retain all saved versions, and SHALL NOT return a review result
+
+#### Scenario: Session shuts down with a preview still open
+- **WHEN** the session shuts down while preview windows are still open
+- **THEN** the system SHALL close every open preview window and SHALL retain all saved versions
+
 ### Requirement: Review messages are treated as untrusted content
 The panel SHALL send only fixed action events plus escaped user feedback to the Pi session, and diagram HTML/SVG content SHALL NOT be executable as panel commands.
 
