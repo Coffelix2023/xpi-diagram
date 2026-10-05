@@ -464,10 +464,17 @@ export class DiagramReviewManager {
         ].sort((a, b) => a - b)
       : await listVersions(projectRoot, diagram.diagramId);
     const currentVersion = session?.currentVersion ?? diagram.version;
+    const dialogOptions = signal
+      ? {
+          signal,
+        }
+      : undefined;
     const selected = await context.ui.select(
       `Review diagram ${diagram.diagramId}`,
       versions.map((version) => `v${version}`),
+      dialogOptions,
     );
+    if (this.abortPreview(signal, key)) return undefined;
     if (!selected)
       return {
         status: "closed",
@@ -477,7 +484,9 @@ export class DiagramReviewManager {
     const confirmed = await context.ui.confirm(
       `Confirm diagram ${diagram.diagramId} v${version}?`,
       "The preview is read-only. Confirm this version in Pi.",
+      dialogOptions,
     );
+    if (this.abortPreview(signal, key)) return undefined;
     if (confirmed) {
       const state =
         (await readDiagramReviewState(projectRoot, diagram.diagramId)) ??
@@ -496,7 +505,9 @@ export class DiagramReviewManager {
     const feedback = await context.ui.input(
       `Feedback for ${diagram.diagramId} v${version}`,
       "Describe the requested changes",
+      dialogOptions,
     );
+    if (this.abortPreview(signal, key)) return undefined;
     if (!feedback)
       return {
         status: "closed",
@@ -530,6 +541,18 @@ export class DiagramReviewManager {
       status: "changes_requested",
       version,
     };
+  }
+
+  /**
+   * Closes the preview session when the calling tool call was cancelled. Idempotent: a
+   * second call for the same key finds no session and returns false.
+   */
+  private abortPreview(signal: AbortSignal | undefined, key: string): boolean {
+    if (!signal?.aborted) return false;
+    const session = this.sessions.get(key);
+    session?.window.close();
+    this.sessions.delete(key);
+    return true;
   }
 
   closeAll(): void {

@@ -27,8 +27,11 @@ class FakeWindow extends EventEmitter {
 }
 
 const temporaryDirectories: string[] = [];
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 
 afterEach(async () => {
+  if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
       rm(directory, {
@@ -82,6 +85,7 @@ function tuiContext(cwd: string, isIdle = true): TuiToolContext {
 describe("TUI diagram generation smoke test", () => {
   it("persists versions, opens one preview, confirms, feeds back, and updates it", async () => {
     const project = await projectDirectory();
+    process.env.PI_CODING_AGENT_DIR = project;
     const window = new FakeWindow();
     const open = vi.fn(() => {
       setImmediate(() =>

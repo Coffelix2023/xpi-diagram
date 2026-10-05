@@ -107,27 +107,33 @@ describe("DiagramReviewManager capability fallback", () => {
       "json",
       false,
     ],
-  ] as const)("preserves a usable path in %s", async (_name, mode, hasUI) => {
-    const project = await projectDirectory();
-    await storeVersion(project, "fallback", "fallback");
-    const loadGlimpse = vi.fn(async () => null);
-    const manager = new DiagramReviewManager(
-      {
-        sendUserMessage: vi.fn(),
-      } as unknown as ExtensionAPI,
-      {
-        loadGlimpse,
-      },
-    );
-    const diagram = result("fallback", 1);
+  ] as const)(
+    "preserves a usable path in %s",
+    async (_name: string, mode: ExtensionContext["mode"], hasUI: boolean) => {
+      const project = await projectDirectory();
+      await storeVersion(project, "fallback", "fallback");
+      const loadGlimpse = vi.fn(async () => null);
+      const manager = new DiagramReviewManager(
+        {
+          sendUserMessage: vi.fn(),
+        } as unknown as ExtensionAPI,
+        {
+          loadGlimpse,
+        },
+      );
+      const diagram = result("fallback", 1);
 
-    const previewStatus = await manager.preview(context(project, mode, hasUI), diagram);
+      const previewStatus = await manager.preview(
+        context(project, mode, hasUI),
+        diagram,
+      );
 
-    expect(previewStatus).toBe("unavailable");
-    expect(diagram.path).toBe(".pi/diagram/fallback/v1.html");
-    expect(await readFile(join(project, diagram.path), "utf8")).toContain("fallback");
-    expect(loadGlimpse).not.toHaveBeenCalled();
-  });
+      expect(previewStatus).toBe("unavailable");
+      expect(diagram.path).toBe(".pi/diagram/fallback/v1.html");
+      expect(await readFile(join(project, diagram.path), "utf8")).toContain("fallback");
+      expect(loadGlimpse).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves the artifact when Glimpse is missing", async () => {
     const project = await projectDirectory();
@@ -282,6 +288,59 @@ describe("Pi review interaction", () => {
       version: 1,
     });
   });
+});
+
+it("closes the preview and stops when the tool call is aborted", async () => {
+  const project = await projectDirectory();
+  await storeVersion(project, "aborted-review", "version one");
+  const window = new FakeWindow();
+  const manager = new DiagramReviewManager(
+    {
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI,
+    {
+      loadGlimpse: async () => ({
+        open: () => {
+          setImmediate(() => window.emit("ready", {}));
+          return window;
+        },
+      }),
+    },
+  );
+  const controller = new AbortController();
+  const ui = {
+    confirm: vi.fn(async () => false),
+    input: vi.fn(async () => undefined),
+    select: vi.fn(async () => {
+      controller.abort();
+      return undefined;
+    }),
+  };
+  const diagram = result("aborted-review", 1);
+  await expect(manager.preview(context(project), diagram)).resolves.toBe("opened");
+
+  await expect(
+    manager.review(
+      {
+        ...context(project),
+        ui: ui as never,
+      },
+      diagram,
+      controller.signal,
+    ),
+  ).resolves.toBeUndefined();
+
+  expect(ui.select).toHaveBeenCalledWith(
+    expect.stringContaining("aborted-review"),
+    [
+      "v1",
+    ],
+    {
+      signal: controller.signal,
+    },
+  );
+  expect(ui.confirm).not.toHaveBeenCalled();
+  expect(window.closeCount).toBe(1);
 });
 
 describe("review event validation", () => {

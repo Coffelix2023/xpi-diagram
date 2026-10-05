@@ -66,7 +66,9 @@ export async function previewDiagram(
   mode: PreviewMode,
   reviewManager: DiagramReviewManager,
   openBrowser: typeof openBrowserPreview = openBrowserPreview,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) return;
   if (mode === "browser") {
     let result: BrowserPreviewResult;
     try {
@@ -86,13 +88,13 @@ export async function previewDiagram(
       });
     }
     if (result.status === "opened") {
-      diagram.review = await reviewManager.review(context, diagram);
+      diagram.review = await reviewManager.review(context, diagram, signal);
     }
     return;
   }
   const status = await reviewManager.preview(context, diagram);
   if (status === "opened")
-    diagram.review = await reviewManager.review(context, diagram);
+    diagram.review = await reviewManager.review(context, diagram, signal);
 }
 
 export function registerDiagramTool(
@@ -111,7 +113,7 @@ export function registerDiagramTool(
     parameters: diagramArtifactSchema,
     promptSnippet:
       "Create a governed visual explanation as a versioned HTML/SVG diagram",
-    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const details = await createDiagramResult(ctx.cwd, params);
       if (details.validationStatus === "passed") {
         const configuration = await readDiagramConfig();
@@ -135,6 +137,8 @@ export function registerDiagramTool(
             details,
             configuration.config.previewMode,
             reviewManager,
+            undefined,
+            signal,
           );
         }
       }

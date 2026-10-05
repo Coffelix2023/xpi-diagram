@@ -3,12 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerDiagramTool } from "./diagram-tool.js";
+import { previewDiagram, registerDiagramTool } from "./diagram-tool.js";
 
 const FAILED_PATTERN = /failed/i;
 const temporaryDirectories: string[] = [];
 
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 afterEach(async () => {
+  if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
       rm(directory, {
@@ -43,6 +46,7 @@ describe("create_diagram result", () => {
       throw new Error("create_diagram was not registered");
     }
     const project = await projectDirectory();
+    process.env.PI_CODING_AGENT_DIR = project;
     const payload = "x".repeat(200_000);
     const html = validHtml(payload);
     const execute = tool.execute as (
@@ -120,6 +124,7 @@ describe("create_diagram result", () => {
       throw new Error("create_diagram was not registered");
     }
     const project = await projectDirectory();
+    process.env.PI_CODING_AGENT_DIR = project;
     const execute = tool.execute as (
       id: string,
       params: Record<string, unknown>,
@@ -170,5 +175,51 @@ describe("create_diagram result", () => {
     await expect(
       readFile(join(project, ".pi", "diagram", "unsafe-result", "v1.html"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("skips preview when the tool call was already aborted", async () => {
+    const project = await projectDirectory();
+    process.env.PI_CODING_AGENT_DIR = project;
+    const controller = new AbortController();
+    controller.abort();
+    const calls: string[] = [];
+    const manager = {
+      preview: async () => {
+        calls.push("preview");
+        return "opened" as const;
+      },
+      review: async () => {
+        calls.push("review");
+        return undefined;
+      },
+    } as unknown as Parameters<typeof previewDiagram>[3];
+    const diagram = {
+      diagnostics: [],
+      diagramId: "aborted",
+      path: ".pi/diagram/aborted/v1.html",
+      previewStatus: "not-attempted" as const,
+      simplificationNotes: [],
+      type: "architecture" as const,
+      validationStatus: "passed" as const,
+      version: 1,
+    };
+
+    await previewDiagram(
+      {
+        cwd: project,
+        hasUI: true,
+        mode: "tui",
+        ui: {} as never,
+        isIdle: () => true,
+      },
+      diagram,
+      "glimpse",
+      manager,
+      undefined,
+      controller.signal,
+    );
+
+    expect(calls).toEqual([]);
+    expect(diagram.previewStatus).toBe("not-attempted");
   });
 });
